@@ -24,14 +24,14 @@ actually sends. This codebase now requires both, for exactly this reason.
 | CI | None | — |
 | Coverage measurement | None | — |
 
-14 tests pass today (`python -m pytest tests/`, from `backend/`).
+18 tests pass today (`python -m pytest tests/`, from `backend/`).
 
 ## Phase A — Fixture coverage for every source we claim to support (mostly DONE)
 
 Goal: every branch in `extractor.py`'s field-by-field priority chain
 (JSON-LD → site-specific handler → meta tags → plain HTML → heuristics →
-domain fallback) has at least one fixture test that would fail if that
-branch broke.
+domain fallback → AI-assisted extraction) has at least one fixture test
+that would fail if that branch broke.
 
 - [x] JSON-LD JobPosting (`test_jsonld_extraction`)
 - [x] OpenGraph fallback + text-deadline heuristic (`test_og_fallback_with_text_deadline`)
@@ -41,6 +41,21 @@ branch broke.
 - [x] `_normalise_date` format coverage
 - [x] LinkedIn topcard handler (`test_linkedin_topcard_extraction`)
 - [x] Greenhouse embedded-JSON handler (`test_greenhouse_remix_extraction`)
+- [x] AI-preferred-host success path skips local fetch entirely
+      (`test_ai_preferred_host_skips_local_fetch_when_ai_succeeds`)
+- [x] AI-preferred-host degrades to local pipeline when AI unusable
+      (`test_ai_preferred_host_falls_back_to_local_pipeline_when_ai_unusable`)
+- [x] AI supplements only empty fields, never clobbers local data
+      (`test_ai_supplements_missing_fields_without_clobbering_local_data`)
+- [x] Generic placeholder `<title>` (e.g. AshbyHQ's pre-hydration shell)
+      rejected rather than reported as the job title
+      (`test_generic_placeholder_title_not_reported_as_real`)
+
+`ai_extractor.py`'s own Tavily/Groq call logic (HTTP request shape, JSON
+parsing, error handling) has **no fixture tests yet** — only live
+verification during Task 2.1. It's a thin, mostly-I/O module; worth a
+follow-up if it grows more logic than "call API, parse JSON, return None
+on any failure."
 - [ ] Indeed / Naukri / SmartRecruiters / AshbyHQ / Lever — no fixture yet;
       blocked on Task 2.1 in `PRD.md` (need to see real markup first before
       writing a fixture that means anything).

@@ -2,9 +2,12 @@
 
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
+
+load_dotenv()  # backend/.env — GROQ_API_KEY / TAVILY_API_KEY for ai_extractor.py
 
 from . import database
 from .extractor import extract_job_metadata

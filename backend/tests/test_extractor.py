@@ -2,6 +2,8 @@ import os
 import sys
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.extractor import (  # noqa: E402
@@ -9,6 +11,18 @@ from app.extractor import (  # noqa: E402
     _normalise_date,
     extract_job_metadata,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ai_calls(monkeypatch):
+    """These are unit tests for the local parsing pipeline specifically.
+    Without this, a real GROQ_API_KEY/TAVILY_API_KEY loaded into the process
+    env by anything else in the test run (e.g. test_api.py importing
+    app.main, which calls load_dotenv()) would make AI_PREFERRED_HOSTS tests
+    (LinkedIn) silently skip the local pipeline they're meant to exercise
+    and hit the real network instead — slow, flaky, and testing the wrong
+    code path."""
+    monkeypatch.setattr("app.extractor.ai_extractor.ai_extract_job_metadata", lambda url: None)
 
 JSONLD_PAGE = """
 <html><head>
@@ -134,6 +148,84 @@ def test_fetch_failure_still_returns_domain_company():
     assert result["fetch_ok"] is False
     assert result["company"] == "Microsoft"
     assert result["notes"]
+
+
+def test_ai_preferred_host_skips_local_fetch_when_ai_succeeds():
+    """For AI_PREFERRED_HOSTS (robots.txt-restricted or empirically unreliable
+    sources), a usable AI result must be used as-is and the local
+    requests.get fetch must never even be attempted."""
+    ai_fields = {
+        "title": "Staff Engineer",
+        "company": "Acme",
+        "description": "Build the core platform.",
+        "deadline": "2026-09-01",
+        "location": "Remote",
+    }
+    with patch(
+        "app.extractor.ai_extractor.ai_extract_job_metadata", return_value=ai_fields
+    ), patch("app.extractor.requests.get") as mock_get:
+        result = extract_job_metadata("https://www.linkedin.com/jobs/view/999")
+
+    mock_get.assert_not_called()
+    assert result["title"] == "Staff Engineer"
+    assert result["company"] == "Acme"
+    assert result["deadline"] == "2026-09-01"
+    assert result["fetch_ok"] is True
+    assert any("AI-assisted" in note for note in result["notes"])
+
+
+def test_ai_preferred_host_falls_back_to_local_pipeline_when_ai_unusable():
+    """If AI extraction is unavailable/fails (returns None, or a dict with
+    neither title nor description), a prefer_ai host must still degrade to
+    the local pipeline rather than returning nothing."""
+    result = _extract_from_html(LINKEDIN_PAGE, "https://www.linkedin.com/jobs/view/123")
+    # _no_real_ai_calls autouse fixture makes ai_extract_job_metadata return
+    # None, so this must be the local topcard parser, same as
+    # test_linkedin_topcard_extraction.
+    assert result["title"] == "Backend Engineer"
+    assert result["company"] == "Acme in India"
+
+
+NO_DESCRIPTION_PAGE = """
+<html><head><title>Ignored Title</title></head>
+<body><h1>Data Engineer</h1></body></html>
+"""
+
+
+def test_ai_supplements_missing_fields_without_clobbering_local_data():
+    """For a non-AI_PREFERRED_HOSTS source, AI extraction should only fill in
+    fields the local pipeline left empty — never overwrite what local
+    parsing already found."""
+    ai_fields = {
+        "title": "Wrong Title From AI",
+        "company": "",
+        "description": "The real job description text.",
+        "deadline": "",
+        "location": "",
+    }
+    with patch(
+        "app.extractor.ai_extractor.ai_extract_job_metadata", return_value=ai_fields
+    ), patch("app.extractor.requests.get", return_value=FakeResponse(NO_DESCRIPTION_PAGE)):
+        result = extract_job_metadata("https://careers.example.com/job/1")
+
+    # Local <h1> title must win — AI must not clobber a field local already found.
+    assert result["title"] == "Data Engineer"
+    # Description was empty locally, so AI's is used to fill the gap.
+    assert result["description"] == "The real job description text."
+    assert any("supplemented" in note for note in result["notes"])
+
+
+PLACEHOLDER_TITLE_PAGE = """
+<html><head><title>Jobs</title></head><body>No h1 here.</body></html>
+"""
+
+
+def test_generic_placeholder_title_not_reported_as_real():
+    """Some JS-rendered ATS pages (e.g. AshbyHQ) ship a static <title>Jobs</title>
+    shell before client-side hydration. That's worse than no title — it must
+    not be reported as the job title."""
+    result = _extract_from_html(PLACEHOLDER_TITLE_PAGE, "https://careers.example.com/job/2")
+    assert result["title"] == ""
 
 
 def test_company_from_domain():

@@ -10,6 +10,13 @@ Extraction strategy (best source wins, field by field):
 4. Heuristics                      — company from the domain or from
    "Role at Company" / "Role - Company | Careers" title patterns,
    deadline from "apply by ..." phrases in the page text.
+5. AI-assisted extraction (ai_extractor.py) — Tavily fetches the page and
+   Groq reads it for structured fields. Used as the *primary* source for
+   AI_PREFERRED_HOSTS (sites whose robots.txt disallows AI-agent fetching,
+   or that were live-tested and found to return wrong-not-just-missing
+   data from the local pipeline), and as a *fallback* for everything else
+   when title/description come back empty. Silently unavailable if
+   GROQ_API_KEY/TAVILY_API_KEY aren't set — degrades to steps 1-4 only.
 
 Every field is returned even when empty so the frontend can let the
 user fill in whatever we could not detect.
@@ -23,6 +30,8 @@ from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
+
+from . import ai_extractor
 
 FETCH_TIMEOUT = 15
 MAX_DESCRIPTION_CHARS = 5000
@@ -100,6 +109,39 @@ PATH_BASED_ATS_HOSTS = (
 # should still be read off the host, not blanked out as an aggregator name.
 SUBDOMAIN_BASED_ATS_SUFFIXES = (".myworkdayjobs.com",)
 
+# Hosts routed through the Tavily+Groq pipeline (ai_extractor.py) instead of
+# our own direct fetch, for one of two empirically-grounded reasons — see
+# PRD.md Task 2.1:
+#   - robots.txt explicitly disallows AI-agent user-agents site-wide
+#     (linkedin.com, naukri.com, indeed.com) — Tavily does the fetch instead
+#     of our backend, sidestepping that entirely.
+#   - live-tested and found to return wrong-not-just-missing data: the local
+#     pipeline picks up boilerplate/nav text instead of the real job content
+#     (jobs.lever.co, smartrecruiters.com) or gets nothing at all because the
+#     page is client-rendered (jobs.ashbyhq.com).
+# If AI extraction is unavailable (no API keys) or fails, these hosts still
+# fall back to the local pipeline below rather than returning nothing.
+AI_PREFERRED_HOSTS = (
+    "linkedin.com",
+    "naukri.com",
+    "indeed.com",
+    "jobs.lever.co",
+    "jobs.ashbyhq.com",
+    "smartrecruiters.com",
+)
+
+
+def _ai_result_usable(ai_fields: dict | None) -> bool:
+    return bool(ai_fields and (ai_fields.get("title") or ai_fields.get("description")))
+
+
+def _apply_ai_fields(result: dict, ai_fields: dict) -> None:
+    if ai_fields.get("deadline"):
+        ai_fields["deadline"] = _normalise_date(ai_fields["deadline"])
+    for field in ("title", "company", "description", "deadline", "location"):
+        if ai_fields.get(field):
+            result[field] = ai_fields[field]
+
 
 def extract_job_metadata(url: str) -> dict:
     """Fetch *url* and pull out job fields. Never raises on parse issues —
@@ -115,6 +157,22 @@ def extract_job_metadata(url: str) -> dict:
         "fetch_ok": False,
         "notes": [],
     }
+    host = result["source"].lower().removeprefix("www.")
+    prefer_ai = any(host == h or host.endswith("." + h) for h in AI_PREFERRED_HOSTS)
+
+    if prefer_ai:
+        ai_fields = ai_extractor.ai_extract_job_metadata(url)
+        if _ai_result_usable(ai_fields):
+            _apply_ai_fields(result, ai_fields)
+            result["fetch_ok"] = True
+            result["notes"].append(
+                "Fetched via AI-assisted extraction (this site restricts direct "
+                "automated fetching)."
+            )
+            _apply_fallbacks(result)
+            return result
+        # AI extraction unavailable/failed — fall through to the local
+        # pipeline below as a degraded-mode fallback rather than giving up.
 
     try:
         response = requests.get(
@@ -135,7 +193,6 @@ def extract_job_metadata(url: str) -> dict:
         _apply_jsonld(result, posting)
         result["notes"].append("Structured JobPosting data found on the page.")
 
-    host = result["source"].lower().removeprefix("www.")
     if "linkedin.com" in host:
         _apply_linkedin(result, soup)
     elif "greenhouse.io" in host:
@@ -144,6 +201,21 @@ def extract_job_metadata(url: str) -> dict:
     _apply_meta_tags(result, soup)
     _apply_plain_html(result, soup)
     _apply_text_heuristics(result, soup)
+
+    if not prefer_ai and (not result["title"] or not result["description"]):
+        ai_fields = ai_extractor.ai_extract_job_metadata(url)
+        if ai_fields:
+            before = dict(result)
+            for field in ("title", "company", "description", "deadline", "location"):
+                if not result[field] and ai_fields.get(field):
+                    result[field] = (
+                        _normalise_date(ai_fields[field]) if field == "deadline" else ai_fields[field]
+                    )
+            if result != before:
+                result["notes"].append(
+                    "Some details supplemented via AI-assisted extraction."
+                )
+
     _apply_fallbacks(result)
     return result
 
@@ -336,13 +408,23 @@ def _apply_meta_tags(result: dict, soup: BeautifulSoup) -> None:
             result["company"] = _strip_careers_suffix(site_name)
 
 
+# Static-shell placeholder titles some JS-rendered ATS pages (e.g. AshbyHQ)
+# ship in <title> before client-side hydration ever runs — not a real job
+# title, so worse than reporting none at all.
+GENERIC_PLACEHOLDER_TITLES = frozenset(
+    {"jobs", "job", "careers", "career", "job openings", "job search", "job details"}
+)
+
+
 def _apply_plain_html(result: dict, soup: BeautifulSoup) -> None:
     if not result["title"]:
         h1 = soup.find("h1")
         if h1:
             result["title"] = _clean_text(h1.get_text())
     if not result["title"] and soup.title:
-        result["title"] = _clean_text(soup.title.get_text())
+        candidate = _clean_text(soup.title.get_text())
+        if candidate.lower() not in GENERIC_PLACEHOLDER_TITLES:
+            result["title"] = candidate
 
 
 # --------------------------------------------------------------------------

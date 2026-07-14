@@ -102,21 +102,73 @@ Processes:
 title + company at minimum" — the bar the product promises on the tin.
 
 ### Task 2.1 — Verify + fix remaining major ATS/job-board sources live
-Status: NEXT
+Status: DONE — 2026-07-15
 Why: Phase 1 only live-tested LinkedIn and Greenhouse. Indeed, Naukri,
 SmartRecruiters and AshbyHQ are named in `AGGREGATOR_HOSTS` /
-`KNOWN_COMPANY_DOMAINS` but have never been checked against a real page —
-they may have the same class of bug LinkedIn/Greenhouse had.
+`KNOWN_COMPANY_DOMAINS` but had never been checked against a real page.
+
+Live-testing turned up a real policy question, not just parsing bugs:
+Naukri's and Indeed's `robots.txt` explicitly disallow AI-agent
+user-agents (`Claude-User`, `claudebot`, `GPTBot`, etc.) site-wide —
+LinkedIn disallows `ClaudeBot` specifically. Fetching those pages with our
+backend's own generic-browser-UA `requests.get`, even for a single
+user-pasted URL, means *we* are the one crawling a site that has named
+AI agents as unwelcome. Resolution (user-directed): route those hosts
+through Tavily (a third-party extraction API — Tavily does the actual
+fetch, not our backend) instead of fetching them ourselves.
+
+That same investigation found jobs.lever.co and smartrecruiters.com
+returning confidently-wrong data locally (boilerplate/CTA text picked up
+instead of the real JD — worse than Task 1.5's bugs, since these aren't
+empty fields a human would notice need filling in), and jobs.ashbyhq.com
+returning nothing (client-rendered, no content in the raw HTML at all).
+
 Processes:
-- [ ] For each of {Indeed, Naukri, SmartRecruiters, AshbyHQ, Lever}: fetch
-      one real, currently-live job posting; capture actual title/company/
-      description/location/deadline output.
-- [ ] For any field that comes back empty or wrong, add a targeted fix
-      (site-specific selector, or a `_company_from_domain`/heuristic tweak)
-      the same way Task 1.5 did — not a generic catch-all.
-- [ ] Add a fixture-based regression test per fixed source.
-- [ ] Update the extraction-order docstring at the top of `extractor.py` if
-      the priority order changes for any source.
+- [x] Live-tested Lever, AshbyHQ, SmartRecruiters, LinkedIn, Indeed,
+      Naukri, and Workday (a user-provided real Agilent posting) against
+      the live pipeline.
+- [x] Built `backend/app/ai_extractor.py`: Tavily `/extract` fetches the
+      page, Groq (`llama-3.3-70b-versatile`, JSON mode) reads it for
+      structured title/company/description/deadline/location — handles
+      messy content (wrong JSON-LD block, boilerplate mixed with real JD)
+      far better than brittle selectors. Returns `None` on any failure or
+      missing API keys; never raises.
+- [x] Added `AI_PREFERRED_HOSTS` in `extractor.py`: linkedin.com,
+      naukri.com, indeed.com (robots.txt-restricted), jobs.lever.co,
+      jobs.ashbyhq.com, smartrecruiters.com (empirically unreliable
+      locally). These try AI extraction *first*; if AI is unavailable or
+      returns nothing usable, they degrade to the local pipeline rather
+      than failing outright.
+- [x] For all other hosts, AI extraction runs as a *fallback* only when
+      local title/description come back empty — never overwrites fields
+      the local pipeline already found (see
+      `test_ai_supplements_missing_fields_without_clobbering_local_data`).
+- [x] Fixed a real bug found along the way: `_apply_plain_html`'s
+      `<title>` fallback was reporting AshbyHQ's static pre-hydration
+      shell title ("Jobs") as the job title. Added
+      `GENERIC_PLACEHOLDER_TITLES` to reject known-generic shell titles —
+      empty is better than confidently wrong.
+- [x] `GROQ_API_KEY` / `TAVILY_API_KEY` in `backend/.env` (gitignored,
+      loaded via `load_dotenv()` in `main.py`). Not present → AI paths
+      silently no-op, local pipeline still works exactly as before.
+- [x] Fixture-based regression tests added (not just live verification)
+      for: AI-preferred-host success path (local fetch never attempted),
+      AI-preferred-host degrading to local when AI unusable, AI
+      supplementing without clobbering local data, and the placeholder-
+      title fix. All hermetic — an autouse fixture in `test_extractor.py`
+      blocks real AI calls regardless of what's in the process env, after
+      a real bug where `test_api.py` importing `app.main` leaked real API
+      keys into `test_extractor.py`'s tests via shared process env,
+      making a "unit" test silently hit the real network.
+- [x] Updated the extraction-order docstring in `extractor.py` (now lists
+      AI-assisted extraction as strategy 5).
+
+Known unfixable limitation: jobs.ashbyhq.com fails for *both* the local
+fetch and Tavily (`"error": "Failed to fetch url"` from Tavily on two
+different companies' postings) — Ashby's bot-detection blocks Tavily's
+crawler too. No further fix without a full headless-browser fetch
+(Playwright/Puppeteer in production), which is out of scope. Degrades
+gracefully to an empty, honestly-blank result rather than wrong data.
 
 ### Task 2.2 — Accept pasted text, not just a URL
 Status: PLANNED

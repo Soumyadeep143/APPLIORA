@@ -23,6 +23,16 @@ page and extracts details in this order:
 4. **Heuristics** — company from the domain (`careers.microsoft.com` →
    Microsoft) or from "Role at Company" title patterns, deadline from
    "last date to apply …" phrases in the page text.
+5. **AI-assisted extraction** (`backend/app/ai_extractor.py`) — Tavily
+   fetches the page and Groq reads it for structured fields. This is the
+   *first* attempt for LinkedIn, Naukri, Indeed (their `robots.txt`
+   disallows AI-agent user-agents, so Tavily does the fetch instead of our
+   backend), Lever, AshbyHQ, and SmartRecruiters (found via live-testing to
+   return wrong-not-just-missing data from steps 1-4). For every other
+   source it's a *fallback* when title/description come back empty.
+   Requires `GROQ_API_KEY` and `TAVILY_API_KEY` in `backend/.env` (see
+   below) — without them this step silently no-ops and steps 1-4 still
+   work exactly as before.
 
 Whatever is found is shown in an **editable preview** before sharing, so you
 can fix or fill in anything the page didn't expose (some sites render jobs
@@ -44,6 +54,14 @@ Backend (port 8000):
 cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
+```
+
+Optional — enables AI-assisted extraction (see above). Create
+`backend/.env` (gitignored) with:
+
+```
+GROQ_API_KEY=...
+TAVILY_API_KEY=...
 ```
 
 Frontend (port 5173, proxies API calls to the backend):

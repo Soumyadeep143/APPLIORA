@@ -1,5 +1,9 @@
 # Appliora — share jobs with friends
 
+**Picking up development?** Start with [`PROMPT.md`](PROMPT.md) — it walks
+you through `AGENT.md` (working rules) and `PRD.md` (the phased plan) and
+tells you exactly what to do next.
+
 Paste a job link, and Appliora automatically fetches the **job title, company,
 description and last date to apply**, then posts it to a shared board that you
 and your friends can browse and search.

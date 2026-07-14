@@ -69,6 +69,60 @@ def test_og_fallback_with_text_deadline():
     assert result["deadline"] == "2026-08-31"
 
 
+LINKEDIN_PAGE = """
+<html><head>
+<title>Acme in India hiring Backend Engineer in Pune, India | LinkedIn</title>
+<meta property="og:title" content="Acme in India hiring Backend Engineer in Pune, India" />
+<meta property="og:description" content="Posted 2 days ago. See this and similar jobs on LinkedIn." />
+</head><body>
+<h1 class="top-card-layout__title topcard__title">Backend Engineer</h1>
+<a class="topcard__org-name-link topcard__flavor--black-link" href="https://in.linkedin.com/company/acme">
+  Acme in India
+</a>
+<span class="topcard__flavor topcard__flavor--bullet">Pune, India</span>
+<div class="show-more-less-html__markup">
+  <p>Build backend services.</p><p>5+ years experience.</p>
+</div>
+</body></html>
+"""
+
+GREENHOUSE_REMIX_PAGE = """
+<html><head>
+<title>Job Application for Backend Engineer at Acme</title>
+<meta property="og:title" content="Backend Engineer" />
+<meta property="og:description" content="Remote - India" />
+</head><body>
+<h1 class="section-header section-header--large font-primary">Backend Engineer</h1>
+<script>
+window.__remixContext = {"state":{"loaderData":{"job":{"title":"Backend Engineer",
+"company_name":"Acme","job_post_location":"Remote - India",
+"content":"<p>Build backend services.</p><p>5+ years experience.</p>"}}}};
+</script>
+</body></html>
+"""
+
+
+def test_linkedin_topcard_extraction():
+    result = _extract_from_html(LINKEDIN_PAGE, "https://www.linkedin.com/jobs/view/123")
+    assert result["title"] == "Backend Engineer"
+    assert result["company"] == "Acme in India"
+    assert result["location"] == "Pune, India"
+    assert "Build backend services." in result["description"]
+    assert "See this and similar jobs on LinkedIn" not in result["description"]
+
+
+def test_greenhouse_remix_extraction():
+    result = _extract_from_html(
+        GREENHOUSE_REMIX_PAGE, "https://job-boards.greenhouse.io/acme/jobs/1"
+    )
+    assert result["title"] == "Backend Engineer"
+    assert result["company"] == "Acme"
+    assert result["location"] == "Remote - India"
+    assert "Build backend services." in result["description"]
+    # og:description ("Remote - India") must not leak into the JD field.
+    assert result["description"] != "Remote - India"
+
+
 def test_fetch_failure_still_returns_domain_company():
     import requests as requests_lib
 
@@ -84,8 +138,17 @@ def test_fetch_failure_still_returns_domain_company():
 
 def test_company_from_domain():
     assert _company_from_domain("https://jobs.careers.microsoft.com/x") == "Microsoft"
-    assert _company_from_domain("https://boards.greenhouse.io/acme/jobs/1") == ""
     assert _company_from_domain("https://careers.zomato.com/openings") == "Zomato"
+    # Path-based ATS: employer is a URL segment, not part of the host.
+    assert _company_from_domain("https://boards.greenhouse.io/acme/jobs/1") == "Acme"
+    assert _company_from_domain("https://job-boards.greenhouse.io/acme-labs/jobs/1") == "Acme Labs"
+    assert _company_from_domain("https://jobs.lever.co/notion/abc-123") == "Notion"
+    # Subdomain-based ATS: employer IS the subdomain even though the
+    # platform's own name ("myworkdayjobs") also appears in the host.
+    assert (
+        _company_from_domain("https://acme.wd5.myworkdayjobs.com/en-US/External/job/1")
+        == "Acme"
+    )
 
 
 def test_normalise_date():

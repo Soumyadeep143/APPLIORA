@@ -85,6 +85,21 @@ AGGREGATOR_HOSTS = (
     "ashbyhq.com",
 )
 
+# ATS platforms shared by many employers on one hostname, where the employer
+# is a URL *path* segment (job-boards.greenhouse.io/acme/jobs/1, jobs.lever.co
+# /acme/...) rather than part of the domain.
+PATH_BASED_ATS_HOSTS = (
+    "boards.greenhouse.io",
+    "job-boards.greenhouse.io",
+    "jobs.lever.co",
+    "jobs.ashbyhq.com",
+)
+
+# ATS platforms where, despite the platform's own name appearing in the host,
+# the employer is a per-tenant *subdomain* (acme.wd5.myworkdayjobs.com) and so
+# should still be read off the host, not blanked out as an aggregator name.
+SUBDOMAIN_BASED_ATS_SUFFIXES = (".myworkdayjobs.com",)
+
 
 def extract_job_metadata(url: str) -> dict:
     """Fetch *url* and pull out job fields. Never raises on parse issues —
@@ -119,6 +134,12 @@ def extract_job_metadata(url: str) -> dict:
     if posting:
         _apply_jsonld(result, posting)
         result["notes"].append("Structured JobPosting data found on the page.")
+
+    host = result["source"].lower().removeprefix("www.")
+    if "linkedin.com" in host:
+        _apply_linkedin(result, soup)
+    elif "greenhouse.io" in host:
+        _apply_greenhouse_embedded_json(result, page_html)
 
     _apply_meta_tags(result, soup)
     _apply_plain_html(result, soup)
@@ -212,6 +233,79 @@ def _jsonld_location(location) -> str:
     if isinstance(location, str):
         return location
     return ""
+
+
+# --------------------------------------------------------------------------
+# Site-specific handlers
+#
+# These run before the generic meta-tag pass and only fill fields that are
+# still empty, so they slot into the same "best source wins" order as
+# JSON-LD. They exist because, on these two very common sources, the generic
+# og:title/og:description fallbacks are actively wrong rather than merely
+# absent (see extractor test notes for real examples).
+# --------------------------------------------------------------------------
+
+def _apply_linkedin(result: dict, soup: BeautifulSoup) -> None:
+    """LinkedIn's og:title is "Company hiring Title in Place | LinkedIn" and
+    og:description is truncated boilerplate ("...See this and similar jobs on
+    LinkedIn."). The public job page's own topcard markup has the real
+    fields, so read those directly instead."""
+    if not result["title"]:
+        title_tag = soup.find(class_=re.compile(r"\btopcard__title\b"))
+        if title_tag:
+            result["title"] = _clean_text(title_tag.get_text())
+
+    if not result["company"]:
+        org_link = soup.find("a", class_=re.compile(r"\btopcard__org-name-link\b"))
+        if org_link:
+            result["company"] = _clean_text(org_link.get_text())
+
+    if not result["location"]:
+        loc_tag = soup.find(class_=re.compile(r"\btopcard__flavor--bullet\b"))
+        if loc_tag:
+            result["location"] = _clean_text(loc_tag.get_text())
+
+    if not result["description"]:
+        desc_tag = soup.find(
+            class_=re.compile(r"\b(show-more-less-html__markup|description__text)\b")
+        )
+        if desc_tag:
+            result["description"] = _html_to_text(str(desc_tag))
+
+
+def _greenhouse_json_field(page_html: str, field: str) -> str | None:
+    """Pull a top-level string field out of the `window.__remixContext` blob
+    that Greenhouse's newer job-boards.greenhouse.io template embeds for
+    client-side hydration (it ships no JSON-LD or og:site_name)."""
+    match = re.search(rf'"{field}":"((?:\\.|[^"\\])*)"', page_html)
+    if not match:
+        return None
+    try:
+        return json.loads(f'"{match.group(1)}"')
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _apply_greenhouse_embedded_json(result: dict, page_html: str) -> None:
+    if not result["company"]:
+        company = _greenhouse_json_field(page_html, "company_name")
+        if company:
+            result["company"] = _clean_text(company)
+
+    if not result["title"]:
+        title = _greenhouse_json_field(page_html, "title")
+        if title:
+            result["title"] = _clean_text(title)
+
+    if not result["location"]:
+        location = _greenhouse_json_field(page_html, "job_post_location")
+        if location:
+            result["location"] = _clean_text(location)
+
+    if not result["description"]:
+        content = _greenhouse_json_field(page_html, "content")
+        if content:
+            result["description"] = _html_to_text(content)
 
 
 # --------------------------------------------------------------------------
@@ -315,14 +409,35 @@ def _company_from_domain(url: str) -> str:
     for domain, name in KNOWN_COMPANY_DOMAINS.items():
         if host == domain or host.endswith("." + domain):
             return name
+
+    if host in PATH_BASED_ATS_HOSTS:
+        return _company_from_path(url)
+
+    for suffix in SUBDOMAIN_BASED_ATS_SUFFIXES:
+        if host.endswith(suffix):
+            # acme.wd5.myworkdayjobs.com -> Acme (subdomain IS the employer,
+            # even though "myworkdayjobs" also matches AGGREGATOR_HOSTS below)
+            prefix = host[: -len(suffix)]
+            candidate = prefix.split(".")[0] if prefix else ""
+            return candidate.capitalize() if candidate else ""
+
     if _is_aggregator_name(host):
         return ""
-    # careers.acme.com / acme.wd5.myworkdayjobs.com -> Acme
+    # careers.acme.com -> Acme
     parts = host.split(".")
     for part in parts:
         if part not in ("careers", "jobs", "apply", "www", "co", "com", "in", "io"):
             return part.capitalize()
     return ""
+
+
+def _company_from_path(url: str) -> str:
+    """For ATS hosts shared by many employers, the employer is the first URL
+    path segment (job-boards.greenhouse.io/acme/jobs/1 -> Acme)."""
+    segments = [s for s in urlparse(url).path.split("/") if s]
+    if not segments or segments[0] in ("jobs", "job", "embed", "careers"):
+        return ""
+    return segments[0].replace("-", " ").replace("_", " ").title()
 
 
 def _is_aggregator_name(name: str) -> bool:

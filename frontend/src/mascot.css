@@ -22,12 +22,12 @@
   margin-bottom: 4px;
   margin-right: 10px;
   background: var(--surface, #fff);
-  border: 1px solid var(--line, #e3e5ef);
+  border: 1px solid var(--line, #d6e4e9);
   border-radius: 14px 14px 4px 14px;
-  box-shadow: 0 4px 14px rgba(28, 30, 38, 0.14);
+  box-shadow: 0 4px 14px rgba(18, 48, 59, 0.14);
   padding: 9px 13px;
   font-size: 0.83rem;
-  color: var(--ink, #1c1e26);
+  color: var(--ink, #12303b);
   animation: bubble-pop 0.28s ease-out;
 }
 

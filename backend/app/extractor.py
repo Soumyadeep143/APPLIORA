@@ -1,4 +1,5 @@
-"""Job metadata extraction from a shared job URL.
+"""Job metadata extraction from a shared job URL, or from pasted text when
+there's no scrapeable URL (see extract_job_metadata_from_text).
 
 Extraction strategy (best source wins, field by field):
 1. schema.org JobPosting JSON-LD  — used by Microsoft Careers, LinkedIn,
@@ -131,16 +132,84 @@ AI_PREFERRED_HOSTS = (
 )
 
 
+# Per-field confidence tiers, exposed in the result's `field_confidence` dict
+# so the frontend can flag fields that were guessed rather than found
+# authoritatively (see PRD.md Task 2.3). A field only ever gets one entry —
+# `_set` below only writes a field that's still empty, matching the
+# "first source in the priority chain wins" rule already used throughout
+# this module, so the confidence of whichever source actually won is what's
+# recorded.
+CONFIDENCE_HIGH = "high"  # structured/authoritative: JSON-LD, a site-specific
+# handler with hardcoded knowledge of that page's markup, or AI-assisted
+# extraction when it's the deliberately chosen primary source (AI_PREFERRED_HOSTS).
+CONFIDENCE_MEDIUM = "medium"  # generic but reasonably reliable: OpenGraph/meta
+# tags, a page's <h1>, or AI extraction used to fill a gap on a non-preferred host.
+CONFIDENCE_LOW = "low"  # a guess: domain-based company, title/company text
+# splitting, deadline regex over free text, or a pasted-text title with no
+# explicit "Role:" label.
+
+
+def _set(result: dict, field: str, value: str, confidence: str) -> None:
+    """Fill result[field] if it's still empty, and record which confidence
+    tier supplied it. No-ops if the field already has a value or *value* is
+    falsy — safe to call unconditionally from within an `if not result[x]`
+    guard without changing existing fill-only-if-empty behaviour."""
+    if not value or result[field]:
+        return
+    result[field] = value
+    result["field_confidence"][field] = confidence
+
+
 def _ai_result_usable(ai_fields: dict | None) -> bool:
     return bool(ai_fields and (ai_fields.get("title") or ai_fields.get("description")))
 
 
-def _apply_ai_fields(result: dict, ai_fields: dict) -> None:
+def _apply_ai_fields(result: dict, ai_fields: dict, confidence: str) -> None:
     if ai_fields.get("deadline"):
         ai_fields["deadline"] = _normalise_date(ai_fields["deadline"])
     for field in ("title", "company", "description", "deadline", "location"):
         if ai_fields.get(field):
-            result[field] = ai_fields[field]
+            _set(result, field, ai_fields[field], confidence)
+
+
+def extract_job_metadata_from_text(text: str) -> dict:
+    """Parse a pasted job description (email/Slack forward, no scrapeable
+    URL) using the same text heuristics as extract_job_metadata. Skips the
+    network fetch and anything that depends on having fetched HTML
+    (JSON-LD, meta tags, site-specific handlers) — there's no page to read
+    those from."""
+    text = text.strip()
+    result = {
+        "url": "",
+        "title": "",
+        "company": "",
+        "description": text[:MAX_DESCRIPTION_CHARS],
+        "deadline": "",
+        "location": "",
+        "source": "",
+        "fetch_ok": True,
+        "notes": ["Parsed from pasted text — double-check the details before sharing."],
+        "field_confidence": {},
+    }
+
+    # Prefer an explicitly labeled "Role:"/"Position:" line over the first
+    # line of the text — forwarded emails commonly lead with "Fwd: ..." or
+    # other subject/preamble lines before the actual role line. A labeled
+    # line is a stronger signal than a blind first-line guess.
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    labeled_line = next((line for line in lines if LEADING_LABEL_RE.match(line)), None)
+    title_source = labeled_line if labeled_line is not None else (lines[0] if lines else "")
+    title_confidence = CONFIDENCE_MEDIUM if labeled_line is not None else CONFIDENCE_LOW
+    _set(result, "title", _clean_text(LEADING_LABEL_RE.sub("", title_source))[:300], title_confidence)
+
+    # Wrap as (escaped) HTML purely to reuse _apply_text_heuristics' soup
+    # signature — get_text() below returns the original text unchanged.
+    soup = BeautifulSoup(html_lib.escape(text), "html.parser")
+    _apply_text_heuristics(result, soup)
+
+    if not result["title"] and not result["description"]:
+        result["notes"].append("No usable text found — please fill the fields in manually.")
+    return result
 
 
 def extract_job_metadata(url: str) -> dict:
@@ -156,6 +225,7 @@ def extract_job_metadata(url: str) -> dict:
         "source": urlparse(url).netloc,
         "fetch_ok": False,
         "notes": [],
+        "field_confidence": {},
     }
     host = result["source"].lower().removeprefix("www.")
     prefer_ai = any(host == h or host.endswith("." + h) for h in AI_PREFERRED_HOSTS)
@@ -163,7 +233,7 @@ def extract_job_metadata(url: str) -> dict:
     if prefer_ai:
         ai_fields = ai_extractor.ai_extract_job_metadata(url)
         if _ai_result_usable(ai_fields):
-            _apply_ai_fields(result, ai_fields)
+            _apply_ai_fields(result, ai_fields, CONFIDENCE_HIGH)
             result["fetch_ok"] = True
             result["notes"].append(
                 "Fetched via AI-assisted extraction (this site restricts direct "
@@ -208,9 +278,10 @@ def extract_job_metadata(url: str) -> dict:
             before = dict(result)
             for field in ("title", "company", "description", "deadline", "location"):
                 if not result[field] and ai_fields.get(field):
-                    result[field] = (
+                    value = (
                         _normalise_date(ai_fields[field]) if field == "deadline" else ai_fields[field]
                     )
+                    _set(result, field, value, CONFIDENCE_MEDIUM)
             if result != before:
                 result["notes"].append(
                     "Some details supplemented via AI-assisted extraction."
@@ -262,25 +333,25 @@ def _pick_job_posting(data) -> dict | None:
 
 def _apply_jsonld(result: dict, posting: dict) -> None:
     if posting.get("title"):
-        result["title"] = _clean_text(str(posting["title"]))
+        _set(result, "title", _clean_text(str(posting["title"])), CONFIDENCE_HIGH)
 
     org = posting.get("hiringOrganization")
     if isinstance(org, dict) and org.get("name"):
-        result["company"] = _clean_text(str(org["name"]))
+        _set(result, "company", _clean_text(str(org["name"])), CONFIDENCE_HIGH)
     elif isinstance(org, str):
-        result["company"] = _clean_text(org)
+        _set(result, "company", _clean_text(org), CONFIDENCE_HIGH)
 
     if posting.get("description"):
-        result["description"] = _html_to_text(str(posting["description"]))
+        _set(result, "description", _html_to_text(str(posting["description"])), CONFIDENCE_HIGH)
 
     valid_through = posting.get("validThrough") or posting.get("applicationDeadline")
     if valid_through:
-        result["deadline"] = _normalise_date(str(valid_through))
+        _set(result, "deadline", _normalise_date(str(valid_through)), CONFIDENCE_HIGH)
 
     location = posting.get("jobLocation")
     loc_text = _jsonld_location(location)
     if loc_text:
-        result["location"] = loc_text
+        _set(result, "location", loc_text, CONFIDENCE_HIGH)
 
 
 def _jsonld_location(location) -> str:
@@ -325,24 +396,24 @@ def _apply_linkedin(result: dict, soup: BeautifulSoup) -> None:
     if not result["title"]:
         title_tag = soup.find(class_=re.compile(r"\btopcard__title\b"))
         if title_tag:
-            result["title"] = _clean_text(title_tag.get_text())
+            _set(result, "title", _clean_text(title_tag.get_text()), CONFIDENCE_HIGH)
 
     if not result["company"]:
         org_link = soup.find("a", class_=re.compile(r"\btopcard__org-name-link\b"))
         if org_link:
-            result["company"] = _clean_text(org_link.get_text())
+            _set(result, "company", _clean_text(org_link.get_text()), CONFIDENCE_HIGH)
 
     if not result["location"]:
         loc_tag = soup.find(class_=re.compile(r"\btopcard__flavor--bullet\b"))
         if loc_tag:
-            result["location"] = _clean_text(loc_tag.get_text())
+            _set(result, "location", _clean_text(loc_tag.get_text()), CONFIDENCE_HIGH)
 
     if not result["description"]:
         desc_tag = soup.find(
             class_=re.compile(r"\b(show-more-less-html__markup|description__text)\b")
         )
         if desc_tag:
-            result["description"] = _html_to_text(str(desc_tag))
+            _set(result, "description", _html_to_text(str(desc_tag)), CONFIDENCE_HIGH)
 
 
 def _greenhouse_json_field(page_html: str, field: str) -> str | None:
@@ -362,22 +433,22 @@ def _apply_greenhouse_embedded_json(result: dict, page_html: str) -> None:
     if not result["company"]:
         company = _greenhouse_json_field(page_html, "company_name")
         if company:
-            result["company"] = _clean_text(company)
+            _set(result, "company", _clean_text(company), CONFIDENCE_HIGH)
 
     if not result["title"]:
         title = _greenhouse_json_field(page_html, "title")
         if title:
-            result["title"] = _clean_text(title)
+            _set(result, "title", _clean_text(title), CONFIDENCE_HIGH)
 
     if not result["location"]:
         location = _greenhouse_json_field(page_html, "job_post_location")
         if location:
-            result["location"] = _clean_text(location)
+            _set(result, "location", _clean_text(location), CONFIDENCE_HIGH)
 
     if not result["description"]:
         content = _greenhouse_json_field(page_html, "content")
         if content:
-            result["description"] = _html_to_text(content)
+            _set(result, "description", _html_to_text(content), CONFIDENCE_HIGH)
 
 
 # --------------------------------------------------------------------------
@@ -393,19 +464,21 @@ def _meta_content(soup: BeautifulSoup, **attrs) -> str:
 
 def _apply_meta_tags(result: dict, soup: BeautifulSoup) -> None:
     if not result["title"]:
-        result["title"] = _meta_content(soup, property="og:title") or _meta_content(
+        title = _meta_content(soup, property="og:title") or _meta_content(
             soup, name="twitter:title"
         )
+        _set(result, "title", title, CONFIDENCE_MEDIUM)
     if not result["description"]:
-        result["description"] = (
+        description = (
             _meta_content(soup, property="og:description")
             or _meta_content(soup, name="twitter:description")
             or _meta_content(soup, name="description")
         )
+        _set(result, "description", description, CONFIDENCE_MEDIUM)
     if not result["company"]:
         site_name = _meta_content(soup, property="og:site_name")
         if site_name and not _is_aggregator_name(site_name):
-            result["company"] = _strip_careers_suffix(site_name)
+            _set(result, "company", _strip_careers_suffix(site_name), CONFIDENCE_MEDIUM)
 
 
 # Static-shell placeholder titles some JS-rendered ATS pages (e.g. AshbyHQ)
@@ -420,16 +493,21 @@ def _apply_plain_html(result: dict, soup: BeautifulSoup) -> None:
     if not result["title"]:
         h1 = soup.find("h1")
         if h1:
-            result["title"] = _clean_text(h1.get_text())
+            _set(result, "title", _clean_text(h1.get_text()), CONFIDENCE_MEDIUM)
     if not result["title"] and soup.title:
         candidate = _clean_text(soup.title.get_text())
         if candidate.lower() not in GENERIC_PLACEHOLDER_TITLES:
-            result["title"] = candidate
+            _set(result, "title", candidate, CONFIDENCE_LOW)
 
 
 # --------------------------------------------------------------------------
 # Heuristics
 # --------------------------------------------------------------------------
+
+# Strips a leading "Role:"/"Position:"/"Job Title:" label from the first
+# line of pasted text (common in forwarded job emails/Slack messages) so
+# the title/company splitting below sees just "Role at Company".
+LEADING_LABEL_RE = re.compile(r"^(?:role|position|job\s*title|title)\s*:\s*", re.IGNORECASE)
 
 TITLE_SPLIT_RE = re.compile(r"\s+[|–—-]\s+| at | @ ", re.IGNORECASE)
 DEADLINE_TEXT_RE = re.compile(
@@ -462,19 +540,19 @@ def _apply_text_heuristics(result: dict, soup: BeautifulSoup) -> None:
                 and not _is_aggregator_name(candidate)
                 and candidate.lower() not in ("careers", "jobs", "job details")
             ):
-                result["company"] = _strip_careers_suffix(candidate)
+                _set(result, "company", _strip_careers_suffix(candidate), CONFIDENCE_LOW)
             result["title"] = parts[0]
 
     if not result["deadline"]:
         text = soup.get_text(" ", strip=True)[:20000]
         match = DEADLINE_TEXT_RE.search(text)
         if match:
-            result["deadline"] = _normalise_date(match.group(1).strip())
+            _set(result, "deadline", _normalise_date(match.group(1).strip()), CONFIDENCE_LOW)
 
 
 def _apply_fallbacks(result: dict) -> None:
     if not result["company"]:
-        result["company"] = _company_from_domain(result["url"])
+        _set(result, "company", _company_from_domain(result["url"]), CONFIDENCE_LOW)
     if result["description"]:
         result["description"] = result["description"][:MAX_DESCRIPTION_CHARS]
     if not result["fetch_ok"] and not result["notes"]:

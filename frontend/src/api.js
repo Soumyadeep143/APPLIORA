@@ -23,8 +23,20 @@ async function request(path, options = {}) {
   return response.json()
 }
 
-export const extractJob = (url) =>
-  request('/api/extract', { method: 'POST', body: JSON.stringify({ url }) })
+export const extractJob = (payload) =>
+  request('/api/extract', { method: 'POST', body: JSON.stringify(payload) })
+
+export const register = (name, password) =>
+  request('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ name, password }),
+  })
+
+export const login = (name, password) =>
+  request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ name, password }),
+  })
 
 export const listJobs = (search = '') =>
   request(`/api/jobs${search ? `?search=${encodeURIComponent(search)}` : ''}`)

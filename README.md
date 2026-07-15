@@ -38,6 +38,15 @@ Whatever is found is shown in an **editable preview** before sharing, so you
 can fix or fill in anything the page didn't expose (some sites render jobs
 with JavaScript or block bots — the preview tells you when that happens).
 
+## How sharing identity works
+
+No passwords, no email. Enter your name plus the friend group's shared
+invite code once (top right) and you're recognized as that person from
+then on — the same name (case-insensitive) always maps back to the same
+identity, even on a new device. Anyone who knows the invite code can post
+as any name, so this is intentionally lightweight: right for a small
+trusted friend board, not a substitute for real auth at a bigger scale.
+
 ## Project layout
 
 ```
@@ -56,10 +65,15 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Optional — enables AI-assisted extraction (see above). Create
-`backend/.env` (gitignored) with:
+Create `backend/.env` (gitignored):
 
 ```
+# Required — the shared invite code friends use to sign in (no passwords/
+# email; see "How sharing identity works" below).
+APPLIORA_INVITE_CODE=...
+
+# Optional — enables AI-assisted extraction (see above). Without these,
+# that step silently no-ops and steps 1-4 still work exactly as before.
 GROQ_API_KEY=...
 TAVILY_API_KEY=...
 ```
@@ -79,9 +93,10 @@ http://localhost:8000/docs.
 
 | Method | Path             | Purpose                                            |
 | ------ | ---------------- | -------------------------------------------------- |
+| POST   | `/api/auth/login`| Sign in with name + invite code, get `{id, name}`   |
 | POST   | `/api/extract`   | Fetch a job URL and return detected fields (no save) |
 | GET    | `/api/jobs`      | List shared jobs, newest first (`?search=` filters) |
-| POST   | `/api/jobs`      | Save a job to the shared board                      |
+| POST   | `/api/jobs`      | Save a job to the shared board (`user_id` required) |
 | GET    | `/api/jobs/{id}` | Fetch one job                                       |
 | DELETE | `/api/jobs/{id}` | Remove a job                                        |
 | GET    | `/health`        | Health check                                        |
@@ -99,7 +114,8 @@ python -m pytest tests/
   `pip install -r requirements.txt`, start
   `uvicorn app.main:app --host 0.0.0.0 --port $PORT`. Set `APPLIORA_DB_PATH`
   to a persistent-disk path if you attach one (otherwise the SQLite file
-  resets on redeploy).
+  resets on redeploy). Set `APPLIORA_INVITE_CODE` (required — sign-in
+  returns a 503 without it) and, optionally, `GROQ_API_KEY`/`TAVILY_API_KEY`.
 - **Frontend → Vercel**: project rooted at `frontend`, framework
   preset *Vite*, environment variable `VITE_API_URL` pointing at the Render
   backend URL (e.g. `https://appliora.onrender.com`).

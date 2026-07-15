@@ -10,6 +10,7 @@ from app.extractor import (  # noqa: E402
     _company_from_domain,
     _normalise_date,
     extract_job_metadata,
+    extract_job_metadata_from_text,
 )
 
 
@@ -81,6 +82,53 @@ def test_og_fallback_with_text_deadline():
     assert result["company"] == "Acme"
     assert result["description"] == "We need a React developer."
     assert result["deadline"] == "2026-08-31"
+
+
+def test_field_confidence_high_for_jsonld():
+    """Task 2.3: every field sourced from structured JobPosting JSON-LD is
+    'high' confidence — nothing here is a guess."""
+    result = _extract_from_html(JSONLD_PAGE, "https://jobs.careers.microsoft.com/job/1")
+    for field in ("title", "company", "description", "deadline", "location"):
+        assert result["field_confidence"][field] == "high"
+
+
+def test_field_confidence_medium_for_meta_tags_low_for_text_deadline():
+    result = _extract_from_html(OG_ONLY_PAGE, "https://careers.acme.com/jobs/9")
+    assert result["field_confidence"]["title"] == "medium"
+    assert result["field_confidence"]["description"] == "medium"
+    assert result["field_confidence"]["company"] == "medium"
+    # Deadline comes from a free-text regex match, not a structured field.
+    assert result["field_confidence"]["deadline"] == "low"
+
+
+TITLE_SPLIT_COMPANY_PAGE = """
+<html><head>
+<title>Backend Developer - Zeta Corp</title>
+<meta property="og:title" content="Backend Developer - Zeta Corp" />
+<meta property="og:description" content="Build APIs." />
+</head><body>Apply by 2026-10-01</body></html>
+"""
+
+
+def test_field_confidence_low_for_title_split_company():
+    """When company isn't in any meta tag and has to be split off the title
+    string itself ("Role - Company"), that's a guess, not a found field."""
+    result = _extract_from_html(TITLE_SPLIT_COMPANY_PAGE, "https://jobs.example.com/1")
+    assert result["title"] == "Backend Developer"
+    assert result["company"] == "Zeta Corp"
+    assert result["field_confidence"]["company"] == "low"
+
+
+def test_field_confidence_low_for_domain_fallback_company():
+    import requests as requests_lib
+
+    with patch(
+        "app.extractor.requests.get",
+        side_effect=requests_lib.ConnectionError("boom"),
+    ):
+        result = extract_job_metadata("https://careers.microsoft.com/job/5")
+    assert result["company"] == "Microsoft"
+    assert result["field_confidence"]["company"] == "low"
 
 
 LINKEDIN_PAGE = """
@@ -172,6 +220,8 @@ def test_ai_preferred_host_skips_local_fetch_when_ai_succeeds():
     assert result["deadline"] == "2026-09-01"
     assert result["fetch_ok"] is True
     assert any("AI-assisted" in note for note in result["notes"])
+    # AI is the deliberately chosen primary source for these hosts — high confidence.
+    assert result["field_confidence"]["title"] == "high"
 
 
 def test_ai_preferred_host_falls_back_to_local_pipeline_when_ai_unusable():
@@ -213,6 +263,10 @@ def test_ai_supplements_missing_fields_without_clobbering_local_data():
     # Description was empty locally, so AI's is used to fill the gap.
     assert result["description"] == "The real job description text."
     assert any("supplemented" in note for note in result["notes"])
+    # Local <h1> title keeps its own (medium) confidence; AI-supplemented
+    # description is a gap-fill, not the primary source, so medium too.
+    assert result["field_confidence"]["title"] == "medium"
+    assert result["field_confidence"]["description"] == "medium"
 
 
 PLACEHOLDER_TITLE_PAGE = """
@@ -241,6 +295,63 @@ def test_company_from_domain():
         _company_from_domain("https://acme.wd5.myworkdayjobs.com/en-US/External/job/1")
         == "Acme"
     )
+
+
+PASTED_EMAIL_TEXT = """Role: Senior Backend Engineer at Acme Corp
+
+Hey team, forwarding this along, looks like a good fit.
+
+We're looking for a Senior Backend Engineer to join our platform team.
+You'll work on distributed systems at scale.
+
+Apply by: 15 September 2026
+"""
+
+
+def test_extract_from_pasted_text():
+    """Task 2.2: no URL at all, e.g. an email/Slack forward — must reuse
+    the same title/company splitting and deadline heuristics as the HTML
+    path, without ever touching the network."""
+    result = extract_job_metadata_from_text(PASTED_EMAIL_TEXT)
+    assert result["url"] == ""
+    assert result["fetch_ok"] is True
+    assert result["title"] == "Senior Backend Engineer"
+    assert result["company"] == "Acme Corp"
+    assert result["deadline"] == "2026-09-15"
+    assert "distributed systems" in result["description"]
+    # Labeled "Role:" line is a stronger signal than a blind first-line
+    # guess -> medium; company/deadline are still guessed off free text -> low.
+    assert result["field_confidence"]["title"] == "medium"
+    assert result["field_confidence"]["company"] == "low"
+    assert result["field_confidence"]["deadline"] == "low"
+
+
+def test_extract_from_pasted_text_skips_forwarded_subject_line():
+    """Real forwarded emails lead with 'Fwd: ...' or other preamble before
+    the actual role line — found via live-checking this exact scenario
+    with a real forwarded-email-shaped paste. The labeled 'Role:' line
+    must win over the literal first line."""
+    text = (
+        "Fwd: Job opportunity\n\n"
+        "Role: Product Manager at Notion\n\n"
+        "We are hiring a Product Manager to lead our growth team.\n\n"
+        "Last date to apply: 30 September 2026"
+    )
+    result = extract_job_metadata_from_text(text)
+    assert result["title"] == "Product Manager"
+    assert result["company"] == "Notion"
+    assert result["deadline"] == "2026-09-30"
+
+
+def test_extract_from_pasted_text_without_structure_degrades_gracefully():
+    result = extract_job_metadata_from_text(
+        "just some random forwarded text with no clear job info"
+    )
+    assert result["fetch_ok"] is True
+    assert result["title"]  # best-effort: first line, not empty/crashed
+    assert result["company"] == ""
+    # No "Role:" label found -> bare first-line guess, lowest confidence tier.
+    assert result["field_confidence"]["title"] == "low"
 
 
 def test_normalise_date():

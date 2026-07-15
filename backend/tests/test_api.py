@@ -12,6 +12,17 @@ from app.main import app  # noqa: E402
 
 client = TestClient(app)
 
+
+def _register(name: str, password: str = "hunter22"):
+    return client.post("/api/auth/register", json={"name": name, "password": password})
+
+
+def _login(name: str, password: str = "hunter22"):
+    return client.post("/api/auth/login", json={"name": name, "password": password})
+
+
+SAMPLE_USER_ID = _register("Soumyadeep").json()["id"]
+
 SAMPLE_JOB = {
     "url": "https://careers.microsoft.com/us/en/job/12345",
     "title": "Senior Software Engineer",
@@ -19,7 +30,7 @@ SAMPLE_JOB = {
     "description": "Build cloud services.",
     "deadline": "2026-08-31",
     "location": "Hyderabad, India",
-    "shared_by": "Soumyadeep",
+    "user_id": SAMPLE_USER_ID,
 }
 
 
@@ -27,6 +38,46 @@ def test_health():
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_register_then_login():
+    _register("Priya")
+    response = _login("priya")  # case-insensitive name match
+    assert response.status_code == 200
+    assert response.json()["name"] == "Priya"
+
+
+def test_register_rejects_duplicate_name():
+    _register("Chandra")
+    response = _register("chandra")  # case-insensitive collision
+    assert response.status_code == 409
+
+
+def test_register_rejects_short_password():
+    response = _register("Shorty", "abc")
+    assert response.status_code == 422
+
+
+def test_login_rejects_wrong_password():
+    _register("Devika")
+    response = _login("Devika", "not-the-password")
+    assert response.status_code == 401
+
+
+def test_login_rejects_unknown_name():
+    response = _login("NobodyRegisteredThisName")
+    assert response.status_code == 401
+
+
+def test_register_rejects_blank_name():
+    response = _register("   ")
+    assert response.status_code == 422
+
+
+def test_password_hash_never_returned():
+    response = _register("Faisal")
+    assert "password_hash" not in response.json()
+    assert "password" not in response.json()
 
 
 def test_create_and_list_job():
@@ -63,11 +114,28 @@ def test_create_job_rejects_bad_url():
     assert response.status_code == 422
 
 
-def test_create_job_blank_name_becomes_anonymous():
-    response = client.post("/api/jobs", json={**SAMPLE_JOB, "shared_by": "   "})
-    assert response.json()["shared_by"] == "Anonymous"
+def test_create_job_rejects_unknown_user_id():
+    response = client.post("/api/jobs", json={**SAMPLE_JOB, "user_id": 999999})
+    assert response.status_code == 400
 
 
 def test_extract_rejects_bad_url():
     response = client.post("/api/extract", json={"url": "ftp://example.com/x"})
+    assert response.status_code == 422
+
+
+def test_extract_accepts_pasted_text():
+    response = client.post(
+        "/api/extract",
+        json={"text": "Role: Data Analyst at Zomato\nApply by: 1 September 2026"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Data Analyst"
+    assert body["company"] == "Zomato"
+    assert body["fetch_ok"] is True
+
+
+def test_extract_requires_url_or_text():
+    response = client.post("/api/extract", json={})
     assert response.status_code == 422

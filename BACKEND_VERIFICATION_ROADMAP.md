@@ -24,7 +24,7 @@ actually sends. This codebase now requires both, for exactly this reason.
 | CI | None | — |
 | Coverage measurement | None | — |
 
-18 tests pass today (`python -m pytest tests/`, from `backend/`).
+30 tests pass today (`python -m pytest tests/`, from `backend/`).
 
 ## Phase A — Fixture coverage for every source we claim to support (mostly DONE)
 
@@ -50,6 +50,17 @@ that would fail if that branch broke.
 - [x] Generic placeholder `<title>` (e.g. AshbyHQ's pre-hydration shell)
       rejected rather than reported as the job title
       (`test_generic_placeholder_title_not_reported_as_real`)
+- [x] Pasted-text path (no URL at all — Task 2.2): labeled "Role: ... at
+      ..." line, deadline heuristic against free text
+      (`test_extract_from_pasted_text`), and a forwarded-email "Fwd: ..."
+      subject line that must not be mistaken for the title
+      (`test_extract_from_pasted_text_skips_forwarded_subject_line`) — this
+      second case was found by manually driving the frontend with a
+      realistic forwarded-email paste, not written speculatively.
+- [x] Per-field confidence tiers (Task 2.3): JSON-LD → high, meta-tag
+      fallback → medium, title-split/domain-fallback company and free-text
+      deadline → low, AI-preferred-host primary → high, AI-supplement →
+      medium, both pasted-text title tiers.
 
 `ai_extractor.py`'s own Tavily/Groq call logic (HTTP request shape, JSON
 parsing, error handling) has **no fixture tests yet** — only live

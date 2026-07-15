@@ -171,43 +171,113 @@ crawler too. No further fix without a full headless-browser fetch
 gracefully to an empty, honestly-blank result rather than wrong data.
 
 ### Task 2.2 — Accept pasted text, not just a URL
-Status: PLANNED
+Status: DONE — 2026-07-15
 Why: user-requested — "might be a mail or something that is job related",
 i.e. someone forwards a job description by email/Slack with no clean
 scrapeable URL, or the URL is login-walled (see the Google Forms case
 investigated 2026-07-15: a form requiring Google sign-in can never be
 fetched by any client, bot or browser).
+
+Open product decision resolved (user-directed): a URL stays mandatory at
+*share* time even when the *fetch* step accepted freeform text — a board
+entry with nothing to click through to is low value. `JobCreate.url`
+stays required unchanged; the frontend draft form now has its own
+required "Job link" field so a text-parsed draft can't be shared without
+one.
+
 Processes:
-- [ ] Backend: `POST /api/extract` accepts either `url` or `text`. If
-      `text`, skip the network fetch and run the existing heuristics
-      (`_apply_text_heuristics`, `DEADLINE_TEXT_RE`, title/company
-      splitting) directly against the pasted text.
-- [ ] Frontend: the paste box accepts non-URL input; only show "Fetch
-      details" as a network fetch when the input parses as `http(s)://...`,
-      otherwise show "Parse text" and skip the URL-format validator that
-      currently rejects non-URLs outright (`frontend/src/App.jsx` uses
-      `type="url" required`; `ExtractRequest`/`JobCreate` in `main.py` both
-      hard-require an `http(s)` URL for `url` — needs a schema change, e.g.
-      `url` becomes optional but at least one of `url`/`text` is required).
-- [ ] `JobCreate.url` either becomes optional (job saved without a source
-      link) or the UI requires the user to also paste the real apply link
-      before sharing — decide which; a shared job with no link to apply to
-      is low value, so leaning toward requiring a URL at *share* time even
-      if the *fetch* step accepted freeform text.
-- [ ] Tests: pasted-email-style fixture with no HTML, just plain text
-      containing "Role: ... at ... Apply by ...".
+- [x] Backend: `POST /api/extract` (`ExtractRequest` in `main.py`) accepts
+      either `url` or `text` (`url` is now optional, at least one of the
+      two is required via a `model_validator`). `text` skips the network
+      fetch entirely and runs `extract_job_metadata_from_text` (new,
+      `extractor.py`), which reuses `_apply_text_heuristics`,
+      `DEADLINE_TEXT_RE` and the existing title/company splitting —
+      nothing that depends on fetched HTML (JSON-LD, meta tags,
+      site-specific handlers) applies, since there's no page.
+- [x] A live-shaped check (a realistic forwarded-email paste — "Fwd: ..."
+      subject line followed by a "Role: ... at ..." line) surfaced a real
+      bug: taking the literal first line as the title picked up the "Fwd:"
+      subject instead of the actual role line. Fixed by scanning all lines
+      for a `Role:`/`Position:`/`Job Title:` label first, falling back to
+      the first non-blank line only if no such label exists
+      (`LEADING_LABEL_RE` in `extractor.py`).
+- [x] Frontend: the paste box (`frontend/src/App.jsx`) is now a
+      `<textarea>` accepting a URL or freeform multi-line text. Button
+      label switches between "Fetch details" and "Parse text" based on
+      whether the trimmed input matches `^https?://\S+$`. The draft form
+      gained a required "Job link" field (pre-filled from `meta.url` when
+      fetched from a URL, empty when parsed from text) so sharing is
+      blocked — via the input's own `required` — until a real apply link
+      is supplied.
+- [x] Tests: pasted-email-style fixtures in `test_extractor.py`
+      (`test_extract_from_pasted_text`, and the "Fwd:" subject-line
+      regression case) plus API-level tests in `test_api.py`
+      (`test_extract_accepts_pasted_text`, `test_extract_requires_url_or_text`).
+      23 tests pass (`python -m pytest tests/`, from `backend/`).
+- [x] Manually clicked through both flows in a real browser (Playwright,
+      since `chromium-cli` wasn't available in this environment): pasted a
+      live `boards.greenhouse.io/stripe/jobs/7954688` URL → fetched,
+      shared, appears in feed; pasted the forwarded-email text → parsed to
+      title "Product Manager" / company "Notion" / deadline "2026-09-30",
+      blocked from sharing with an empty Job link (native browser
+      validation), shared successfully once a link was filled in. No
+      console errors either time.
 
 ### Task 2.3 — Surface extraction confidence in the UI
-Status: PLANNED
+Status: DONE — 2026-07-15
 Why: right now `notes` is the only signal a field was guessed vs. found
 authoritatively; users can't tell "we're confident" from "we guessed this
 from the URL."
+
+Implementation note: the processes below ask to "expose that per-field" —
+implemented as a 3-tier `field_confidence` dict (`high`/`medium`/`low`)
+rather than raw strategy names (`jsonld`/`meta`/`heuristic`/...). Reasoning:
+the frontend's actual need (per the second process) is just "flag
+low-confidence fields," and a pre-computed tier keeps that a one-line
+frontend check instead of the frontend needing its own strategy-name → UI
+mapping, and avoids leaking `extractor.py`'s internal function names as a
+de facto API contract that then can't be refactored freely. This was a
+judgment call within the task, not a product decision — noted here for
+visibility, not raised beforehand.
+
 Processes:
-- [ ] Backend: extractor already knows *which* strategy filled each field
-      internally (JSON-LD vs. meta vs. heuristic vs. domain-fallback) —
-      expose that per-field, not just as a flat `notes` list.
-- [ ] Frontend: lightly flag low-confidence fields (e.g. company guessed
-      from domain) in the draft form so the user knows to double check.
+- [x] Backend (`backend/app/extractor.py`): every field-write across every
+      strategy (JSON-LD, `_apply_linkedin`, `_apply_greenhouse_embedded_json`,
+      meta tags, plain HTML, text heuristics, domain-fallback, both AI
+      paths, and the pasted-text pipeline) now goes through a new `_set()`
+      helper that fills the field *and* stamps `result["field_confidence"][field]`
+      with a tier:
+      - `high` — JSON-LD, a site-specific handler, or AI-assisted extraction
+        when it's the deliberately chosen primary source (`AI_PREFERRED_HOSTS`).
+      - `medium` — OpenGraph/meta tags, a page's `<h1>`, AI extraction used
+        to fill a gap on a non-preferred host, or a pasted-text title found
+        via an explicit "Role:"/"Position:" label.
+      - `low` — domain/path-based company fallback, title/company text
+        splitting, the free-text deadline regex, or a pasted-text title
+        with no explicit label (bare first line).
+      Title-trimming/splitting (mutating an already-filled title) and
+      description truncation deliberately bypass `_set` — they modify an
+      existing value rather than filling an empty one, so the original
+      tier stands.
+- [x] Frontend (`frontend/src/App.jsx`): the draft form now carries
+      `draftConfidence` (from `meta.field_confidence`) alongside the
+      existing `draftNotes`. Job title/Company/Last date to apply/Location
+      labels show a small "GUESSED" badge when that field's tier is `low`
+      (`.confidence-flag` in `index.css`) — medium/high fields show nothing,
+      keeping the flag meaningful rather than noisy.
+- [x] Tests: `test_extractor.py` gained tier-specific coverage (JSON-LD →
+      all high; meta-tag fallback → medium, free-text deadline → low;
+      title-splitting company → low; domain-fallback company → low;
+      AI-preferred-host primary → high; AI-supplement → medium; both
+      pasted-text title tiers). 27 tests pass (`python -m pytest tests/`,
+      from `backend/`).
+- [x] Live-verified: a real `boards.greenhouse.io/stripe/...` posting
+      (title/description via meta tags → medium, company via path-fallback
+      → low) and a real `jobs.smartrecruiters.com` posting via the AI path
+      (title → high). Then clicked through both in a real browser
+      (Playwright) — confirmed the "GUESSED" badge renders on Company (and,
+      for a pasted-text draft, also on Last date to apply) while Job title
+      shows no badge on the same draft, and no console errors.
 
 ---
 
@@ -218,17 +288,88 @@ friend-scoped sharing, without over-building an auth system this product
 doesn't need yet.
 
 ### Task 3.1 — Replace free-text name with real identity
-Status: PLANNED
+Status: DONE — 2026-07-15
+Why: `shared_by` was a free-text field with a client-side `localStorage`
+default — anyone could type any name, and it wasn't tied to any real,
+persistent record, so "who shared this" was just a label, not an identity.
+
+Open product decision resolved (user-directed): **simple invite code**, not
+magic-link email or OAuth. No passwords, no email-sending service, no OAuth
+app registration — a single shared secret (`APPLIORA_INVITE_CODE` in
+`backend/.env`) plus a display name is treated as proof of being a member
+of the friend group. Accepted trade-off, stated up front: anyone who knows
+the invite code can claim any name. Right-sized for a small trusted friend
+board; revisit if this ever needs to resist a dishonest member of the
+group itself, not just outsiders.
+
 Processes:
-- [ ] Decide auth approach (magic link vs. OAuth vs. simple invite code) —
-      this is a product decision, raise it before building.
-- [ ] `shared_by` becomes a foreign key to a `users` table instead of a
-      free-text field with a client-side `localStorage` default.
-- [ ] Migrate existing `jobs.shared_by` text values (best-effort match, or
-      leave as a legacy display name for pre-migration rows).
+- [x] New `users` table (`backend/app/database.py`): `id`, `name` (`UNIQUE
+      COLLATE NOCASE` — case-insensitive, so "Alex" and "alex" are the same
+      person), `created_at`.
+- [x] `POST /api/auth/login` (`backend/app/main.py`): `{name, invite_code}`
+      → validates the invite code (`hmac.compare_digest`, both sides
+      UTF-8-encoded) against `APPLIORA_INVITE_CODE`, then
+      `get_or_create_user(name)` — logging in with an existing name
+      re-identifies that person rather than creating a duplicate. Returns
+      503 if the server has no invite code configured, 401 if it doesn't
+      match. No session/token: the frontend just remembers `{id, name}`.
+- [x] `shared_by` becomes a foreign key: `jobs.shared_by_user_id INTEGER
+      REFERENCES users(id)`. `JobCreate.shared_by` (free text) replaced by
+      `JobCreate.user_id` (must reference a real user — 400 if not).
+      `list_jobs`/`get_job` resolve the display name via `COALESCE(users.name,
+      jobs.shared_by)` over a `LEFT JOIN`, so the API's `shared_by` field
+      shape is unchanged for callers (including the frontend) even though
+      its source changed.
+- [x] Migration: existing `jobs` tables (created before this shipped) get
+      `shared_by_user_id` added via `ALTER TABLE ... ADD COLUMN` in
+      `init_db()` (no ORM/migration framework, per AGENT.md's conventions —
+      the same "raw SQL, by hand" pattern already used for this table).
+      Verified against the real local `appliora.db`: existing rows come back
+      with `shared_by_user_id = NULL` and keep displaying their original
+      free-text `shared_by` value unchanged (there's no `users` row yet to
+      best-effort-match them to, since that table only starts getting
+      populated once login exists — the "leave as a legacy display name"
+      option, not a fuzzy-match import).
+- [x] Frontend (`frontend/src/App.jsx`): the always-editable "Your name"
+      input is replaced by a sign-in form (name + invite code) shown until
+      `POST /api/auth/login` succeeds; the result is remembered in
+      `localStorage` (`appliora_user`) and used as `user_id` on
+      `POST /api/jobs`. A "Switch" button clears it so someone else can
+      sign in on the same device/browser. Sharing is blocked with an
+      inline error if no one is signed in.
+- [x] Tests: `test_api.py` gained login tests (create-and-reuse by
+      case-insensitive name, wrong invite code, blank name) and
+      `test_create_job_rejects_unknown_user_id`; the old
+      `test_create_job_blank_name_becomes_anonymous` (free-text-specific)
+      was removed since that behavior no longer exists. 30 tests pass
+      (`python -m pytest tests/`, from `backend/`).
+- [x] Manually clicked through in a real browser (Playwright): wrong
+      invite code shows an error and no identity is set; correct code
+      signs in and persists across a page reload (`localStorage`); shared a
+      job as one user, hit "Switch", signed in as a second user, shared
+      another job — the feed correctly attributed each job to the right
+      person alongside the pre-existing legacy (pre-migration) job's
+      original free-text name. No console errors.
 
 ### Task 3.2 — Friend groups / private boards
 Status: PLANNED
+Why: right now every signed-in person sees and shares to the same single
+board — there's no way to keep a college-friends board separate from a
+work-friends board.
+
+Attempted and reverted same day (2026-07-15): built multiple
+private-per-group boards (`groups`/`group_memberships` tables, `jobs.group_id`,
+group-scoped `GET`/`POST /api/jobs` with 403/404 membership checks, a
+board-switcher UI) after two product decisions (multi-group membership;
+auto-create a group on an unseen invite code). User then decided against
+group separation entirely — reverted to Task 3.1's single shared board
+before this task's Status was ever flipped to DONE. `APPLIORA_INVITE_CODE`
+(Task 3.1's single server-configured invite code) is back in place — a
+group invite code is required once to establish identity, never asked
+again afterward since the browser remembers `{id, name}` in localStorage.
+If groups are revisited later, re-litigate the two decisions above rather
+than assuming they still hold.
+
 Processes:
 - [ ] `groups` table + membership; a job belongs to a group instead of one
       global board.
@@ -268,7 +409,4 @@ Processes:
 
 ## Open product decisions (not yet made — flag to the user, don't guess)
 
-- Auth approach for Phase 3 (Task 3.1).
 - Notification delivery channel for Phase 4 (Task 4.1).
-- Whether `JobCreate.url` should become optional for text-only shares
-  (Task 2.2) or a URL should stay mandatory at share time.

@@ -107,8 +107,35 @@ body {
   font-size: 0.85rem;
 }
 
-.name-input {
-  width: 180px;
+.login-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.login-row .link-btn {
+  white-space: nowrap;
+}
+
+.login-row input {
+  width: 140px;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.signed-in-as {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+button.ghost.small {
+  padding: 5px 12px;
+  font-size: 0.8rem;
 }
 
 /* ---------- inputs ---------- */
@@ -216,9 +243,15 @@ button.ghost:hover {
   flex-wrap: wrap;
 }
 
-.link-row input {
+.link-row input,
+.link-row textarea {
   flex: 1;
   min-width: 240px;
+}
+
+.link-row textarea {
+  resize: vertical;
+  min-height: 44px;
 }
 
 .draft {
@@ -252,6 +285,23 @@ button.ghost:hover {
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--muted);
+}
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.confidence-flag {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 .draft-actions {
@@ -468,8 +518,13 @@ button.ghost:hover {
 }
 
 @media (max-width: 560px) {
-  .name-input,
+  .login-row,
   .search-input {
     width: 100%;
+  }
+
+  .login-row input {
+    width: 0;
+    flex: 1;
   }
 }

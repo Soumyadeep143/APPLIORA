@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createJob, deleteJob, extractJob, listJobs } from './api'
+import { createJob, deleteJob, extractJob, listJobs, login, register } from './api'
 import Mascot from './Mascot'
 
 const EMPTY_DRAFT = {
@@ -11,6 +11,11 @@ const EMPTY_DRAFT = {
   location: '',
   source: '',
 }
+
+// A single-line http(s) link is treated as a URL to fetch; anything else
+// (multi-line paste, plain text) is sent to the backend as pasted text —
+// see PRD Task 2.2.
+const URL_INPUT_RE = /^https?:\/\/\S+$/i
 
 function timeAgo(isoUtc) {
   const then = new Date(`${isoUtc.replace(' ', 'T')}Z`)
@@ -101,11 +106,26 @@ function JobCard({ job, onDelete }) {
 }
 
 export default function App() {
-  const [name, setName] = useState(() => localStorage.getItem('appliora_name') || '')
+  // Real account (name + bcrypt-hashed password, PRD Task 3.1): {id, name}
+  // from POST /api/auth/register or /api/auth/login, remembered in
+  // localStorage — no session/token beyond that.
+  const [user, setUser] = useState(() => {
+    try {
+      const raw = localStorage.getItem('appliora_user')
+      return raw ? JSON.parse(raw) : null
+    } catch {
+      return null
+    }
+  })
+  const [authMode, setAuthMode] = useState('login') // 'login' | 'register'
+  const [loginName, setLoginName] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loggingIn, setLoggingIn] = useState(false)
   const [linkInput, setLinkInput] = useState('')
   const [fetching, setFetching] = useState(false)
   const [draft, setDraft] = useState(null)
   const [draftNotes, setDraftNotes] = useState([])
+  const [draftConfidence, setDraftConfidence] = useState({})
   const [saving, setSaving] = useState(false)
   const [jobs, setJobs] = useState([])
   const [search, setSearch] = useState('')
@@ -142,8 +162,9 @@ export default function App() {
   }, [search, refresh])
 
   useEffect(() => {
-    localStorage.setItem('appliora_name', name)
-  }, [name])
+    if (user) localStorage.setItem('appliora_user', JSON.stringify(user))
+    else localStorage.removeItem('appliora_user')
+  }, [user])
 
   useEffect(() => {
     if (!toast) return undefined
@@ -151,14 +172,41 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [toast])
 
+  async function handleAuthSubmit(event) {
+    event.preventDefault()
+    if (!loginName.trim() || !loginPassword.trim()) return
+    setLoggingIn(true)
+    setError('')
+    try {
+      const result =
+        authMode === 'register'
+          ? await register(loginName.trim(), loginPassword)
+          : await login(loginName.trim(), loginPassword)
+      setUser(result)
+      setLoginName('')
+      setLoginPassword('')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoggingIn(false)
+    }
+  }
+
+  function handleSwitchUser() {
+    setUser(null)
+    setAuthMode('login')
+  }
+
   async function handleFetch(event) {
     event.preventDefault()
-    const url = linkInput.trim()
-    if (!url) return
+    const value = linkInput.trim()
+    if (!value) return
     setFetching(true)
     setError('')
     try {
-      const meta = await extractJob(url)
+      const meta = URL_INPUT_RE.test(value)
+        ? await extractJob({ url: value })
+        : await extractJob({ text: value })
       setDraft({
         url: meta.url,
         title: meta.title,
@@ -169,6 +217,7 @@ export default function App() {
         source: meta.source,
       })
       setDraftNotes(meta.notes || [])
+      setDraftConfidence(meta.field_confidence || {})
     } catch (err) {
       setError(err.message)
     } finally {
@@ -182,12 +231,21 @@ export default function App() {
       setError('Please add a job title before sharing.')
       return
     }
+    if (!draft?.url.trim()) {
+      setError('Please add the job link before sharing.')
+      return
+    }
+    if (!user) {
+      setError('Please log in or sign up (top right) before sharing.')
+      return
+    }
     setSaving(true)
     setError('')
     try {
-      await createJob({ ...draft, shared_by: name || 'Anonymous' })
+      await createJob({ ...draft, user_id: user.id })
       setDraft(null)
       setDraftNotes([])
+      setDraftConfidence({})
       setLinkInput('')
       setToast('Job shared with your friends 🎉')
       await refresh(search)
@@ -250,28 +308,73 @@ export default function App() {
             <p className="tagline">Share jobs with friends — details fetched automatically</p>
           </div>
         </div>
-        <input
-          className="name-input"
-          placeholder="Your name"
-          value={name}
-          maxLength={80}
-          onChange={(event) => setName(event.target.value)}
-        />
+        {user ? (
+          <div className="identity">
+            <span className="signed-in-as">
+              Signed in as <strong>{user.name}</strong>
+            </span>
+            <button type="button" className="ghost small" onClick={handleSwitchUser}>
+              Switch
+            </button>
+          </div>
+        ) : (
+          <form className="login-row" onSubmit={handleAuthSubmit}>
+            <input
+              placeholder="Your name"
+              value={loginName}
+              maxLength={80}
+              onChange={(event) => setLoginName(event.target.value)}
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={loginPassword}
+              maxLength={200}
+              onChange={(event) => setLoginPassword(event.target.value)}
+            />
+            <button
+              type="submit"
+              disabled={loggingIn || !loginName.trim() || !loginPassword.trim()}
+            >
+              {loggingIn
+                ? authMode === 'register'
+                  ? 'Creating…'
+                  : 'Signing in…'
+                : authMode === 'register'
+                ? 'Sign up'
+                : 'Log in'}
+            </button>
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => {
+                setAuthMode((mode) => (mode === 'login' ? 'register' : 'login'))
+                setError('')
+              }}
+            >
+              {authMode === 'register' ? 'Have an account? Log in' : "New here? Sign up"}
+            </button>
+          </form>
+        )}
       </header>
 
       <main>
         <section className="share-box">
           <h2>Share a job</h2>
           <form className="link-row" onSubmit={handleFetch}>
-            <input
-              type="url"
+            <textarea
               required
-              placeholder="Paste a job link… e.g. https://jobs.careers.microsoft.com/…"
+              rows={2}
+              placeholder="Paste a job link, or the whole posting (email, Slack message, job text)…"
               value={linkInput}
               onChange={(event) => setLinkInput(event.target.value)}
             />
-            <button type="submit" disabled={fetching}>
-              {fetching ? 'Fetching…' : 'Fetch details'}
+            <button type="submit" disabled={fetching || !linkInput.trim()}>
+              {fetching
+                ? 'Fetching…'
+                : URL_INPUT_RE.test(linkInput.trim())
+                ? 'Fetch details'
+                : 'Parse text'}
             </button>
           </form>
 
@@ -284,7 +387,25 @@ export default function App() {
               ))}
               <div className="field-grid">
                 <label>
-                  Job title *
+                  Job link *
+                  <input
+                    required
+                    type="url"
+                    value={draft.url}
+                    maxLength={2000}
+                    placeholder="https://… the real apply link"
+                    onChange={updateDraft('url')}
+                  />
+                </label>
+                <label>
+                  <span className="field-label-row">
+                    Job title *
+                    {draftConfidence.title === 'low' && (
+                      <span className="confidence-flag" title="Guessed from the page — double-check this">
+                        guessed
+                      </span>
+                    )}
+                  </span>
                   <input
                     required
                     value={draft.title}
@@ -294,7 +415,14 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  Company
+                  <span className="field-label-row">
+                    Company
+                    {draftConfidence.company === 'low' && (
+                      <span className="confidence-flag" title="Guessed from the page — double-check this">
+                        guessed
+                      </span>
+                    )}
+                  </span>
                   <input
                     value={draft.company}
                     maxLength={200}
@@ -303,7 +431,14 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  Last date to apply
+                  <span className="field-label-row">
+                    Last date to apply
+                    {draftConfidence.deadline === 'low' && (
+                      <span className="confidence-flag" title="Guessed from the page — double-check this">
+                        guessed
+                      </span>
+                    )}
+                  </span>
                   <input
                     value={draft.deadline}
                     maxLength={60}
@@ -312,7 +447,14 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  Location
+                  <span className="field-label-row">
+                    Location
+                    {draftConfidence.location === 'low' && (
+                      <span className="confidence-flag" title="Guessed from the page — double-check this">
+                        guessed
+                      </span>
+                    )}
+                  </span>
                   <input
                     value={draft.location}
                     maxLength={200}
@@ -341,17 +483,18 @@ export default function App() {
                   onClick={() => {
                     setDraft(null)
                     setDraftNotes([])
+                    setDraftConfidence({})
                   }}
                 >
                   Cancel
                 </button>
                 <span className="sharing-as">
-                  {name.trim() ? (
+                  {user ? (
                     <>
-                      Sharing as <strong>{name.trim()}</strong>
+                      Sharing as <strong>{user.name}</strong>
                     </>
                   ) : (
-                    'Tip: add your name (top right) so friends know who shared this'
+                    'Log in (top right) before sharing so friends know who shared this'
                   )}
                 </span>
               </div>

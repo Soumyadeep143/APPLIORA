@@ -7,7 +7,7 @@ and follow these steps in order. Don't skip ahead to coding before step 3.
 
 Read, in this order:
 
-1. `README.md` — what Appliora is, how to run it, the API surface.
+1. `README.md` — what DevCareer is, how to run it, the API surface.
 2. `AGENT.md` — how to work in this repo: conventions already established,
    non-negotiables, what "done" requires. Don't relitigate decisions it
    documents as already made.

@@ -187,6 +187,8 @@ def extract_job_metadata_from_text(text: str) -> dict:
         "deadline": "",
         "location": "",
         "source": "",
+        "apply_email": "",
+        "apply_email_subject": "",
         "fetch_ok": True,
         "notes": ["Parsed from pasted text — double-check the details before sharing."],
         "field_confidence": {},
@@ -202,10 +204,40 @@ def extract_job_metadata_from_text(text: str) -> dict:
     title_confidence = CONFIDENCE_MEDIUM if labeled_line is not None else CONFIDENCE_LOW
     _set(result, "title", _clean_text(LEADING_LABEL_RE.sub("", title_source))[:300], title_confidence)
 
+    # Explicit "Company:"/"Location:" lines (own labeled line, distinct from
+    # the "Role: X at Y" single-line shape the title-splitting fallback
+    # below handles) — same emoji-bulleted post format as the Role: label.
+    for line in lines:
+        company_match = COMPANY_LABEL_RE.match(line)
+        if company_match:
+            _set(result, "company", _clean_text(company_match.group(1))[:200], CONFIDENCE_MEDIUM)
+            break
+    for line in lines:
+        location_match = LOCATION_LABEL_RE.match(line)
+        if location_match:
+            _set(result, "location", _clean_text(location_match.group(1))[:200], CONFIDENCE_MEDIUM)
+            break
+
     # Wrap as (escaped) HTML purely to reuse _apply_text_heuristics' soup
     # signature — get_text() below returns the original text unchanged.
     soup = BeautifulSoup(html_lib.escape(text), "html.parser")
     _apply_text_heuristics(result, soup)
+
+    # A pasted post may contain a real apply link inline, an apply-by-email
+    # address, both, or neither — url and apply_email are independent
+    # fields (Task 2.4); at least one is required at share time (see
+    # JobCreate.require_link_or_email in main.py), but that's enforced at
+    # the API boundary, not here — extraction always returns best-effort.
+    url_match = PLAIN_URL_RE.search(text)
+    if url_match:
+        result["url"] = url_match.group(0).rstrip(".,;:)]}>\"'")
+
+    apply_email = _find_apply_email(text)
+    if apply_email:
+        email, subject = apply_email
+        result["apply_email"] = email
+        result["apply_email_subject"] = subject
+        result["notes"].append(f"Detected an apply-by-email address ({email}).")
 
     if not result["title"] and not result["description"]:
         result["notes"].append("No usable text found — please fill the fields in manually.")
@@ -223,6 +255,8 @@ def extract_job_metadata(url: str) -> dict:
         "deadline": "",
         "location": "",
         "source": urlparse(url).netloc,
+        "apply_email": "",
+        "apply_email_subject": "",
         "fetch_ok": False,
         "notes": [],
         "field_confidence": {},
@@ -271,6 +305,13 @@ def extract_job_metadata(url: str) -> dict:
     _apply_meta_tags(result, soup)
     _apply_plain_html(result, soup)
     _apply_text_heuristics(result, soup)
+
+    # The page has its own URL already (result["url"] above) — this is
+    # purely additive, for the "or both" case where a listing also offers
+    # an apply-by-email alternative (Task 2.4).
+    apply_email = _find_apply_email(soup.get_text("\n", strip=True)[:20000])
+    if apply_email:
+        result["apply_email"], result["apply_email_subject"] = apply_email
 
     if not prefer_ai and (not result["title"] or not result["description"]):
         ai_fields = ai_extractor.ai_extract_job_metadata(url)
@@ -506,8 +547,17 @@ def _apply_plain_html(result: dict, soup: BeautifulSoup) -> None:
 
 # Strips a leading "Role:"/"Position:"/"Job Title:" label from the first
 # line of pasted text (common in forwarded job emails/Slack messages) so
-# the title/company splitting below sees just "Role at Company".
-LEADING_LABEL_RE = re.compile(r"^(?:role|position|job\s*title|title)\s*:\s*", re.IGNORECASE)
+# the title/company splitting below sees just "Role at Company". The
+# [^\w]{0,6} prefix tolerates a leading emoji bullet ("💼 Role: ..." — the
+# common shape of a forwarded LinkedIn/WhatsApp-style hiring post) without
+# requiring the label to be the very first character on the line.
+LEADING_LABEL_RE = re.compile(
+    r"^[^\w]{0,6}(?:role|position|job\s*title|title)\s*:\s*", re.IGNORECASE
+)
+COMPANY_LABEL_RE = re.compile(
+    r"^[^\w]{0,6}(?:company|organi[sz]ation|employer)\s*:\s*(.+)$", re.IGNORECASE
+)
+LOCATION_LABEL_RE = re.compile(r"^[^\w]{0,6}(?:location|based\s+in|city)\s*:\s*(.+)$", re.IGNORECASE)
 
 TITLE_SPLIT_RE = re.compile(r"\s+[|–—-]\s+| at | @ ", re.IGNORECASE)
 DEADLINE_TEXT_RE = re.compile(
@@ -516,6 +566,47 @@ DEADLINE_TEXT_RE = re.compile(
     r"\s*:?\s*([A-Za-z0-9,\s/.-]{4,40}?\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
     re.IGNORECASE,
 )
+
+# Some forwarded posts (a LinkedIn/WhatsApp-style hiring blurb, an email
+# forward) have no application URL at all — "reply with your resume" is the
+# only way to apply. EMAIL_ADDRESS_RE finds an email token; it's only
+# treated as the apply contact if it sits on a line with an apply-ish
+# keyword (APPLY_EMAIL_LINE_RE), so an incidental "questions? hr@co.com"
+# line doesn't get mistaken for the application address. EMAIL_SUBJECT_RE
+# picks up an explicit "Email Subject: ..." line some posts include.
+EMAIL_ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+APPLY_EMAIL_LINE_RE = re.compile(
+    r"send|email|apply|resume|cv\b|mail\s+to|contact|reach", re.IGNORECASE
+)
+EMAIL_SUBJECT_RE = re.compile(r"(?:email\s+subject|subject\s+line|subject)\s*:\s*(.+)", re.IGNORECASE)
+
+# A pasted post sometimes does include a real apply link inline (just not
+# as a clean single-URL paste, which is what routes to extract_job_metadata
+# instead of this text path in the first place) — prefer that over inventing
+# a mailto: below.
+PLAIN_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _find_apply_email(text: str) -> tuple[str, str] | None:
+    """Scan pasted text line by line for an apply-by-email address plus an
+    optional subject line. Returns (email, subject) — subject is "" if none
+    was found — or None if no apply-email line was found at all."""
+    email = ""
+    subject = ""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if not subject:
+            subject_match = EMAIL_SUBJECT_RE.search(line)
+            if subject_match:
+                subject = subject_match.group(1).strip()
+                continue
+        if not email:
+            email_match = EMAIL_ADDRESS_RE.search(line)
+            if email_match and APPLY_EMAIL_LINE_RE.search(line):
+                email = email_match.group(0)
+    return (email, subject) if email else None
 
 
 def _apply_text_heuristics(result: dict, soup: BeautifulSoup) -> None:
@@ -530,17 +621,31 @@ def _apply_text_heuristics(result: dict, soup: BeautifulSoup) -> None:
             flags=re.IGNORECASE,
         ).strip() or result["title"]
 
-    # "Senior Engineer - Microsoft | Careers" style titles.
+    # "Senior Engineer - Microsoft | Careers" style titles — but only when
+    # splitting leaves exactly one title segment and one company segment
+    # (after dropping a trailing "Careers"/"Jobs" noise word). A title with
+    # several meaningful hyphen-separated segments (e.g. Deloitte's
+    # "Technology & Transformation - Engineering - Senior Consultant -
+    # Python Data Engineer - Bangalore" — department, level, specialization
+    # and location all hyphen-joined, not a "Title - Company" pair) isn't
+    # this shape at all: blindly taking the last segment as company picked
+    # up "Bangalore" (a location) and blindly taking the first segment as
+    # the whole title threw away the rest of the real title. Leaving both
+    # alone here lets the domain-based fallback in _apply_fallbacks (which
+    # already knows deloitte.com -> "Deloitte") fill in company instead —
+    # a correct guess beats a confident wrong one.
     if result["title"] and not result["company"]:
         parts = [p.strip() for p in TITLE_SPLIT_RE.split(result["title"]) if p.strip()]
-        if len(parts) >= 2:
+        while parts and parts[-1].lower() in ("careers", "jobs", "job details"):
+            parts.pop()
+        if len(parts) == 2:
             candidate = parts[-1]
-            if (
-                len(candidate) <= 40
-                and not _is_aggregator_name(candidate)
-                and candidate.lower() not in ("careers", "jobs", "job details")
-            ):
+            if len(candidate) <= 40 and not _is_aggregator_name(candidate):
                 _set(result, "company", _strip_careers_suffix(candidate), CONFIDENCE_LOW)
+            result["title"] = parts[0]
+        elif len(parts) == 1:
+            # Only trailing "Careers"/"Jobs" noise was stripped off — still
+            # worth cleaning the title up even with no company to extract.
             result["title"] = parts[0]
 
     if not result["deadline"]:

@@ -1,4 +1,4 @@
-# AGENT.md — working rules for Appliora
+# AGENT.md — working rules for DevCareer
 
 This file is for whoever is doing the engineering work here — human or
 agentic IDE. Read this once at the start of a session; it doesn't repeat
@@ -7,7 +7,7 @@ actually do next; this file tells you *how* to do it.
 
 ## What this project is
 
-Appliora: paste a job link, get title/company/description/deadline
+DevCareer: paste a job link, get title/company/description/deadline
 auto-filled, share it to a friend board. Backend: FastAPI + SQLite
 (`backend/`). Frontend: React + Vite (`frontend/`). Full API surface and
 run instructions are in `README.md` — don't duplicate that here, read it.
@@ -72,6 +72,20 @@ requirements.txt pytest httpx`.
 - Frontend: no state management library; `useState`/`useCallback` in
   `App.jsx` is deliberate for an app this size. Don't introduce Redux/Zustand
   etc. without discussing it first.
+- Frontend pages (PRD.md Task 6.4): each distinct screen — `AddJobPage`,
+  `BrowseJobsPage`, `LoginPage`, `SignupPage`, `AdminPage` — is its own
+  `.jsx` + `.css` file, rendered by `main.jsx`'s `Root` based on
+  `activeView`. `App.jsx` stays the state owner (fetch/share/delete/react
+  handlers, the real `user` state); page components are presentational,
+  receiving what they need as props rather than each managing their own
+  copy of shared state. `Landing.jsx`'s header is the one persistent nav
+  across every page. Follow this shape for any new page rather than adding
+  another conditional section inside an existing one.
+- Admin accounts (PRD.md Task 6.2) are granted via the `ADMIN_NAMES` env var
+  (comma-separated, case-insensitive, checked at register/login) — there's
+  no seed script and no "first admin" special case in code. To make someone
+  an admin locally, either add their name to `ADMIN_NAMES` and have them
+  log in again, or set `users.is_admin = 1` directly in the dev DB.
 - No comments explaining *what* code does. Comments here explain *why*
   something non-obvious is true (see the `refreshSeq` ref in `App.jsx`, or
   the aggregator-substring-check comment in `extractor.py`) — match that

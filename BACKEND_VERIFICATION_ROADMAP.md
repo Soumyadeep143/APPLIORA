@@ -1,6 +1,6 @@
 # Backend Verification Roadmap
 
-What "properly tested" means for the Appliora backend, where it stands
+What "properly tested" means for the DevCareer backend, where it stands
 today, and the phased plan to close the gap. This is scoped to
 `backend/` only — frontend verification is covered by AGENT.md's
 "actually run `npm run dev` and click through it" rule, not by this doc.
@@ -67,9 +67,23 @@ parsing, error handling) has **no fixture tests yet** — only live
 verification during Task 2.1. It's a thin, mostly-I/O module; worth a
 follow-up if it grows more logic than "call API, parse JSON, return None
 on any failure."
-- [ ] Indeed / Naukri / SmartRecruiters / AshbyHQ / Lever — no fixture yet;
-      blocked on Task 2.1 in `PRD.md` (need to see real markup first before
-      writing a fixture that means anything).
+- [x] Indeed / Naukri / SmartRecruiters / AshbyHQ / Lever — added
+      2026-07-16: `test_ai_preferred_hosts_all_route_through_ai_extraction`
+      (parametrized) asserts each host (plus `www.`/subdomain variants)
+      still routes through `prefer_ai` and never attempts the local fetch.
+      This covers the *routing* decision, not per-site markup parsing —
+      these hosts don't run the local HTML pipeline at all when AI
+      extraction succeeds, so there's no site-specific parsing logic left
+      to fixture-test the way LinkedIn/Greenhouse's handlers are.
+- [x] Compound multi-hyphen page titles (e.g. Deloitte's careers pages —
+      "Dept - Level - Specialisation - Location", not a "Role - Company"
+      pair) — added 2026-07-16 after a real bug found live against
+      `southasiacareers.deloitte.com`: the title-split heuristic blindly
+      took the last hyphen-separated segment as company (picked up
+      "Bangalore," a location) and the first as the whole title, discarding
+      the rest. Fixed to only fire on an exact two-segment split; a
+      known-company domain fallback now correctly supplies "Deloitte"
+      instead (`test_multi_segment_title_not_mistaken_for_title_dash_company`).
 
 ## Phase B — Live smoke checks (manual today, automate next)
 

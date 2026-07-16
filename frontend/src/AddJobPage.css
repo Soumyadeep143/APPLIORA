@@ -1,0 +1,5 @@
+/* Page-specific layout only — form/field styling (.link-row, .draft,
+   .field-grid, etc.) is shared with the rest of the app via index.css. */
+.share-box {
+  animation: cardIn var(--duration-slow) var(--ease-spring) backwards;
+}

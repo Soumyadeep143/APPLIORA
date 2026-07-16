@@ -1,0 +1,626 @@
+/* DevCareer marketing landing page (frontend/src/Landing.jsx).
+   Deliberately its own visual system, separate from the app's Ocean glass
+   theme in index.css — approved design option "3a: navy + orange, soft
+   motion" from the Claude Design exploration. Scoped under .landing so it
+   never bleeds into the real app's styles. */
+
+.landing {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #f5f8fc;
+  color: #0f2942;
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+.landing a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.landing button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+}
+
+.landing h1,
+.landing h2,
+.landing h3 {
+  font-family: 'Space Grotesk', sans-serif;
+  margin: 0;
+}
+
+/* ---------- header ---------- */
+.landing-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px clamp(20px, 5vw, 56px);
+  background: #f5f8fc;
+  border-bottom: 1px solid rgba(15, 41, 66, 0.08);
+}
+
+.landing-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 19px;
+  color: #0f2942;
+  cursor: pointer;
+}
+
+.landing-nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(14px, 3vw, 34px);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.landing-nav .landing-loginlink {
+  color: rgba(15, 41, 66, 0.55);
+}
+
+.landing-signed-in-as {
+  color: #0f2942;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.landing-links {
+  display: flex;
+  align-items: center;
+  gap: clamp(14px, 3vw, 34px);
+}
+
+.landing-links a.active {
+  color: #ff7a30;
+}
+
+.landing-btn-primary {
+  /* Rendered as an onClick <a> (page navigation, not a same-page anchor) —
+     explicit display so padding renders correctly on an inline element. */
+  display: inline-block;
+  background: linear-gradient(135deg, #ff8c42, #ff7a30);
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  animation: dcPulse 2.6s ease-in-out infinite;
+}
+
+.landing-btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+/* ---------- hero ---------- */
+.landing-hero {
+  position: relative;
+  padding: clamp(48px, 8vw, 76px) clamp(20px, 5vw, 56px) 60px;
+  text-align: center;
+  overflow: hidden;
+}
+
+.landing-blob {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.landing-blob-a {
+  top: -140px;
+  left: -80px;
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(closest-side, rgba(74, 144, 217, 0.22), transparent 70%);
+  animation: dcFloat 9s ease-in-out infinite;
+}
+
+.landing-blob-b {
+  bottom: -160px;
+  right: -100px;
+  width: 460px;
+  height: 460px;
+  background: radial-gradient(closest-side, rgba(255, 140, 66, 0.2), transparent 70%);
+  animation: dcFloat2 11s ease-in-out infinite;
+}
+
+.landing-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: #e8f0fa;
+  color: #1e5aa8;
+  font-size: 12.5px;
+  font-weight: 700;
+  animation: dcFadeUp 0.6s ease both;
+}
+
+.landing-hero h1 {
+  position: relative;
+  font-weight: 700;
+  font-size: clamp(34px, 6vw, 56px);
+  line-height: 1.08;
+  margin: 24px auto 0;
+  max-width: 760px;
+  animation: dcFadeUp 0.6s ease 0.1s both;
+}
+
+.landing-hero > p {
+  position: relative;
+  font-size: 16.5px;
+  color: rgba(15, 41, 66, 0.62);
+  max-width: 540px;
+  margin: 20px auto 0;
+  line-height: 1.6;
+  animation: dcFadeUp 0.6s ease 0.2s both;
+}
+
+.landing-search {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin-top: 34px;
+  animation: dcFadeUp 0.6s ease 0.3s both;
+}
+
+.landing-search form {
+  display: flex;
+  align-items: center;
+  width: 600px;
+  max-width: 100%;
+  background: #fff;
+  border-radius: 14px;
+  padding: 8px 8px 8px 22px;
+  box-shadow: 0 16px 40px rgba(15, 41, 66, 0.12);
+}
+
+.landing-search input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: none;
+  font: inherit;
+  font-size: 14.5px;
+  color: #0f2942;
+  min-width: 0;
+}
+
+.landing-search input::placeholder {
+  color: rgba(15, 41, 66, 0.4);
+}
+
+.landing-search button {
+  background: linear-gradient(135deg, #4a90d9, #1e5aa8);
+  color: #fff;
+  padding: 13px 26px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.landing-stats {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  gap: clamp(24px, 6vw, 64px);
+  flex-wrap: wrap;
+  margin-top: 52px;
+  padding-top: 30px;
+  border-top: 1px solid rgba(15, 41, 66, 0.08);
+  max-width: 640px;
+  margin-left: auto;
+  margin-right: auto;
+  animation: dcFadeUp 0.6s ease 0.4s both;
+}
+
+.landing-stat-num {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+}
+
+.landing-stat-label {
+  font-size: 12px;
+  color: rgba(15, 41, 66, 0.5);
+  margin-top: 4px;
+}
+
+/* ---------- trending ---------- */
+.landing-trending,
+.landing-how {
+  scroll-margin-top: 90px; /* clears the sticky .landing-header on anchor jump */
+}
+
+.landing-trending {
+  padding: clamp(32px, 6vw, 56px) clamp(20px, 5vw, 56px);
+  background: #fff;
+}
+
+.landing-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 26px;
+}
+
+.landing-section-head h2 {
+  font-weight: 700;
+  font-size: 24px;
+}
+
+.landing-viewall {
+  color: #ff7a30;
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.trending-empty {
+  color: rgba(15, 41, 66, 0.5);
+  font-size: 14px;
+}
+
+/* Auto-scrolling marquee: the track is rendered wider than its container
+   and animated left-to-right on a loop, starting the moment the page
+   loads — no interaction needed. Card count is doubled in Landing.jsx
+   before render so the loop point is invisible. */
+.trending-marquee {
+  overflow: hidden;
+  /* Fade the strip's hard edges instead of letting cards clip abruptly. */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent);
+}
+
+.trending-track {
+  display: flex;
+  gap: 20px;
+  width: max-content;
+  animation-name: dcMarqueeLTR;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.trending-marquee:hover .trending-track {
+  animation-play-state: paused;
+}
+
+.trending-card {
+  flex: 0 0 240px;
+  width: 240px;
+  text-align: left;
+  background: #f5f8fc;
+  border: 1px solid rgba(15, 41, 66, 0.06);
+  border-radius: 16px;
+  padding: 20px;
+  transition: transform 0.25s, box-shadow 0.25s;
+}
+
+.trending-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 16px 30px rgba(15, 41, 66, 0.12);
+}
+
+.trending-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.trending-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+}
+
+.trending-tag {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 999px;
+}
+
+.trending-tag.remote {
+  color: #1e5aa8;
+  background: #e8f0fa;
+}
+
+.trending-tag.mid {
+  color: #0f2942;
+  background: #edeff4;
+}
+
+.trending-tag.closing {
+  color: #b4501f;
+  background: #fdece0;
+}
+
+.trending-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  margin-top: 14px;
+  /* .trending-card is itself a <button>, and the app's global
+     `button { color: #fff }` (index.css) bleeds into any nested text that
+     doesn't set its own color — explicit here so it can't go invisible. */
+  color: #0f2942;
+}
+
+.trending-company {
+  font-size: 13px;
+  color: rgba(15, 41, 66, 0.5);
+  margin-top: 3px;
+}
+
+.trending-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+}
+
+.trending-deadline {
+  font-size: 12px;
+  color: rgba(15, 41, 66, 0.45);
+}
+
+.trending-apply {
+  background: linear-gradient(135deg, #ff8c42, #ff7a30);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+/* ---------- how it works ---------- */
+.landing-how {
+  padding: clamp(40px, 8vw, 64px) clamp(20px, 5vw, 56px);
+  background: #f5f8fc;
+  text-align: center;
+}
+
+.landing-how h2 {
+  font-weight: 700;
+  font-size: 24px;
+  margin: 0 0 36px;
+}
+
+.how-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 28px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+/* Railway track connecting the three steps, with a train travelling along
+   it — desktop/3-column layout only (see the max-width:720px override
+   below): on the single-column mobile layout a horizontal line stops
+   meaning anything once the steps stack vertically. */
+.how-grid::before {
+  content: '';
+  position: absolute;
+  top: 25px;
+  left: 16.6%;
+  right: 16.6%;
+  height: 3px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgba(15, 41, 66, 0.3) 0,
+    rgba(15, 41, 66, 0.3) 10px,
+    transparent 10px,
+    transparent 20px
+  );
+}
+
+.how-grid > div {
+  position: relative;
+}
+
+.how-grid::after {
+  content: '🚂';
+  position: absolute;
+  top: 2px;
+  left: 16.6%;
+  font-size: 22px;
+  animation: howItWorksTrain 7s ease-in-out infinite;
+}
+
+@keyframes howItWorksTrain {
+  0% { left: 16.6%; opacity: 0; }
+  8% { opacity: 1; }
+  50% { left: 50%; }
+  92% { opacity: 1; }
+  100% { left: 83.4%; opacity: 0; }
+}
+
+@media (max-width: 720px) {
+  .how-grid::before,
+  .how-grid::after {
+    display: none;
+  }
+}
+
+.how-step-num {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 18px;
+  margin: 0 auto;
+}
+
+.how-step-num.blue {
+  background: linear-gradient(135deg, #4a90d9, #1e5aa8);
+}
+
+.how-step-num.orange {
+  background: linear-gradient(135deg, #ff8c42, #ff7a30);
+}
+
+.how-step-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 15.5px;
+  margin-top: 16px;
+}
+
+.how-step-desc {
+  font-size: 13.5px;
+  color: rgba(15, 41, 66, 0.55);
+  margin-top: 8px;
+  line-height: 1.6;
+}
+
+/* ---------- final CTA ---------- */
+.landing-cta-wrap {
+  padding: 0 clamp(20px, 5vw, 56px) 64px;
+  background: #f5f8fc;
+}
+
+.landing-cta {
+  position: relative;
+  background: linear-gradient(120deg, #0f2942, #1e5aa8 60%, #ff7a30 130%);
+  border-radius: 22px;
+  padding: clamp(36px, 6vw, 52px);
+  text-align: center;
+  overflow: hidden;
+}
+
+.landing-cta-blob {
+  position: absolute;
+  top: -100px;
+  right: -60px;
+  width: 280px;
+  height: 280px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  animation: dcFloat 8s ease-in-out infinite;
+}
+
+.landing-cta h3 {
+  position: relative;
+  color: #fff;
+  font-weight: 700;
+  font-size: 28px;
+}
+
+.landing-cta p {
+  position: relative;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 15px;
+  margin: 14px 0 26px;
+}
+
+.landing-cta button {
+  position: relative;
+  background: #fff;
+  color: #0f2942;
+  padding: 14px 30px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+/* ---------- footer ---------- */
+.landing-footer {
+  background: #0f2942;
+  padding: 32px clamp(20px, 5vw, 56px);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.landing-footer .landing-logo {
+  color: #f5f8fc;
+  font-size: 13px;
+}
+
+.landing-footer-links {
+  display: flex;
+  gap: 24px;
+  font-size: 13px;
+  color: rgba(245, 248, 252, 0.6);
+}
+
+@keyframes dcFloat {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(24px, -26px); }
+}
+
+@keyframes dcFloat2 {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-20px, 22px); }
+}
+
+@keyframes dcFadeUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dcPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 122, 48, 0.45); }
+  50% { box-shadow: 0 0 0 12px rgba(255, 122, 48, 0); }
+}
+
+/* Track is the card list doubled, so -50% is exactly one copy's width —
+   starting there and animating to 0% moves the strip left-to-right, and
+   the loop point (0% == the doubled track's own -50%) is seamless. */
+@keyframes dcMarqueeLTR {
+  from { transform: translateX(-50%); }
+  to { transform: translateX(0%); }
+}
+
+@media (max-width: 720px) {
+  .landing-links {
+    display: none;
+  }
+
+  .landing-search form {
+    padding-left: 16px;
+  }
+
+  .landing-search input {
+    font-size: 13px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-blob,
+  .landing-badge,
+  .landing-hero h1,
+  .landing-hero > p,
+  .landing-search,
+  .landing-stats,
+  .landing-btn-primary,
+  .landing-cta-blob,
+  .how-grid::after {
+    animation: none !important;
+  }
+
+  .trending-track {
+    animation: none !important;
+  }
+}

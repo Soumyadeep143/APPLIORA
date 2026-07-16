@@ -1,10 +1,23 @@
 """SQLite storage for shared jobs."""
 
 import os
+import re
+import secrets
 import sqlite3
 from contextlib import contextmanager
 
-DB_PATH = os.environ.get("APPLIORA_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "appliora.db"))
+DB_PATH = os.environ.get("DEVCAREER_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "devcareer.db"))
+
+# Rank points (PRD.md Task 6.1): implementation defaults, not a product
+# decision raised beforehand — same footing as REMINDER_WINDOW_DAYS in
+# reminders.py. Referral weighted higher since it's the growth lever.
+REFERRAL_POINTS = 20
+JOB_SHARE_POINTS = 5
+
+# Excludes visually-ambiguous characters (0/O, 1/I/L) since this code is
+# meant to be read aloud or typed by hand when sharing with a friend.
+_REFERRAL_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_REFERRAL_CODE_LENGTH = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -15,17 +28,41 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    url               TEXT NOT NULL,
-    title             TEXT NOT NULL,
-    company           TEXT NOT NULL DEFAULT '',
-    description       TEXT NOT NULL DEFAULT '',
-    deadline          TEXT NOT NULL DEFAULT '',
-    location          TEXT NOT NULL DEFAULT '',
-    source            TEXT NOT NULL DEFAULT '',
-    shared_by         TEXT NOT NULL DEFAULT 'Anonymous',
-    shared_by_user_id INTEGER REFERENCES users(id),
-    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    url                  TEXT NOT NULL DEFAULT '',
+    title                TEXT NOT NULL,
+    company              TEXT NOT NULL DEFAULT '',
+    description          TEXT NOT NULL DEFAULT '',
+    deadline             TEXT NOT NULL DEFAULT '',
+    location             TEXT NOT NULL DEFAULT '',
+    source               TEXT NOT NULL DEFAULT '',
+    shared_by            TEXT NOT NULL DEFAULT 'Anonymous',
+    shared_by_user_id    INTEGER REFERENCES users(id),
+    apply_email          TEXT NOT NULL DEFAULT '',
+    apply_email_subject  TEXT NOT NULL DEFAULT '',
+    created_at           TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS job_reactions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id     INTEGER NOT NULL REFERENCES jobs(id),
+    user_id    INTEGER NOT NULL REFERENCES users(id),
+    emoji      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (job_id, user_id, emoji)
+);
+
+CREATE TABLE IF NOT EXISTS job_comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id     INTEGER NOT NULL REFERENCES jobs(id),
+    user_id    INTEGER NOT NULL REFERENCES users(id),
+    body       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS job_reminders_sent (
+    job_id  INTEGER PRIMARY KEY REFERENCES jobs(id),
+    sent_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -37,8 +74,10 @@ CREATE TABLE IF NOT EXISTS jobs (
 JOB_SELECT_COLUMNS = """
     jobs.id, jobs.url, jobs.title, jobs.company, jobs.description,
     jobs.deadline, jobs.location, jobs.source, jobs.shared_by_user_id,
+    jobs.apply_email, jobs.apply_email_subject,
     jobs.created_at,
-    COALESCE(users.name, jobs.shared_by) AS shared_by
+    COALESCE(users.name, jobs.shared_by) AS shared_by,
+    (SELECT COUNT(*) FROM job_comments WHERE job_comments.job_id = jobs.id) AS comment_count
 """
 JOB_SELECT_FROM = "FROM jobs LEFT JOIN users ON users.id = jobs.shared_by_user_id"
 
@@ -54,6 +93,10 @@ def _migrate_jobs_table(conn) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
     if "shared_by_user_id" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN shared_by_user_id INTEGER REFERENCES users(id)")
+    if "apply_email" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN apply_email TEXT NOT NULL DEFAULT ''")
+    if "apply_email_subject" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN apply_email_subject TEXT NOT NULL DEFAULT ''")
 
 
 def _migrate_users_table(conn) -> None:
@@ -68,6 +111,81 @@ def _migrate_users_table(conn) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "password_hash" not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
+    if "email" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+    if "reminders_opt_in" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN reminders_opt_in INTEGER NOT NULL DEFAULT 0")
+    if "last_digest_job_id" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN last_digest_job_id INTEGER")
+    if "is_admin" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+    if "is_superadmin" not in columns:
+        # PRD.md Task 6.9: a tier above admin — admins moderate jobs
+        # (Task 6.2's admin-gated delete) and can promote/demote other
+        # admins; superadmins can additionally remove user accounts
+        # entirely. Every superadmin is implicitly treated as an admin too
+        # (checked in main.py's _require_admin), not a separate flag to
+        # keep in sync by hand.
+        conn.execute("ALTER TABLE users ADD COLUMN is_superadmin INTEGER NOT NULL DEFAULT 0")
+    if "referral_code" not in columns:
+        # No UNIQUE constraint at the SQL level — SQLite can't add one via
+        # ALTER TABLE ADD COLUMN without a full table rebuild. Uniqueness is
+        # enforced the same way it's checked: _generate_referral_code loops
+        # until it finds a code with no existing row, both at creation time
+        # and in the backfill below.
+        conn.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
+    if "referred_by_user_id" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN referred_by_user_id INTEGER REFERENCES users(id)")
+    if "rank_points" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN rank_points INTEGER NOT NULL DEFAULT 0")
+    if "username" not in columns:
+        # PRD.md Task 6.7: name (display name) and username (the actual
+        # unique login handle) split apart — previously `name` did both
+        # jobs. No SQL UNIQUE constraint here for the same reason as
+        # referral_code above (ALTER TABLE can't add one); enforced at the
+        # application layer in create_user instead. `name` itself keeps its
+        # original UNIQUE COLLATE NOCASE constraint from the base CREATE
+        # TABLE — removing it would need a full table rebuild, judged not
+        # worth the risk for what's now a redundant-but-harmless constraint
+        # (a display name that also happens to have to be unique).
+        conn.execute("ALTER TABLE users ADD COLUMN username TEXT")
+    # Backfill: any row that predates the referral_code column (or was
+    # somehow inserted without one) gets a freshly generated code so every
+    # existing account can start referring people immediately.
+    for row in conn.execute("SELECT id FROM users WHERE referral_code IS NULL").fetchall():
+        conn.execute(
+            "UPDATE users SET referral_code = ? WHERE id = ?",
+            (_generate_referral_code(conn), row["id"]),
+        )
+    # Backfill: any row from before `username` existed gets one derived
+    # from its display name, so existing accounts (including real ones —
+    # not just test data) can still log in after this migration runs.
+    for row in conn.execute(
+        "SELECT id, name FROM users WHERE username IS NULL OR username = ''"
+    ).fetchall():
+        conn.execute(
+            "UPDATE users SET username = ? WHERE id = ?",
+            (_generate_username_from_name(conn, row["name"]), row["id"]),
+        )
+
+
+def _generate_referral_code(conn) -> str:
+    while True:
+        code = "".join(secrets.choice(_REFERRAL_CODE_ALPHABET) for _ in range(_REFERRAL_CODE_LENGTH))
+        if conn.execute("SELECT 1 FROM users WHERE referral_code = ?", (code,)).fetchone() is None:
+            return code
+
+
+def _generate_username_from_name(conn, name: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "", name.lower()) or "user"
+    candidate = base
+    suffix = 1
+    while conn.execute(
+        "SELECT 1 FROM users WHERE username = ? COLLATE NOCASE", (candidate,)
+    ).fetchone():
+        suffix += 1
+        candidate = f"{base}{suffix}"
+    return candidate
 
 
 def init_db() -> None:
@@ -92,11 +210,18 @@ def insert_job(job: dict) -> dict:
     with get_connection() as conn:
         cursor = conn.execute(
             """INSERT INTO jobs (url, title, company, description, deadline,
-                                 location, source, shared_by, shared_by_user_id)
+                                 location, source, shared_by, shared_by_user_id,
+                                 apply_email, apply_email_subject)
                VALUES (:url, :title, :company, :description, :deadline,
-                       :location, :source, :shared_by, :shared_by_user_id)""",
+                       :location, :source, :shared_by, :shared_by_user_id,
+                       :apply_email, :apply_email_subject)""",
             job,
         )
+        if job.get("shared_by_user_id"):
+            conn.execute(
+                "UPDATE users SET rank_points = rank_points + ? WHERE id = ?",
+                (JOB_SHARE_POINTS, job["shared_by_user_id"]),
+            )
         return get_job(cursor.lastrowid, conn)
 
 
@@ -104,10 +229,18 @@ def get_job(job_id: int, conn=None) -> dict | None:
     query = f"SELECT {JOB_SELECT_COLUMNS} {JOB_SELECT_FROM} WHERE jobs.id = ?"
     if conn is not None:
         row = conn.execute(query, (job_id,)).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        job = dict(row)
+        job["reactions"] = list_reactions(job_id, conn)
+        return job
     with get_connection() as conn:
         row = conn.execute(query, (job_id,)).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        job = dict(row)
+        job["reactions"] = list_reactions(job_id, conn)
+        return job
 
 
 def list_jobs(search: str = "") -> list[dict]:
@@ -123,34 +256,82 @@ def list_jobs(search: str = "") -> list[dict]:
     query += " ORDER BY jobs.id DESC"
     with get_connection() as conn:
         rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        jobs = [dict(row) for row in rows]
+        for job in jobs:
+            job["reactions"] = list_reactions(job["id"], conn)
+        return jobs
 
 
 def delete_job(job_id: int) -> bool:
+    """No FK cascade configured (SQLite requires PRAGMA foreign_keys = ON,
+    not set here — see users.shared_by_user_id above for the same
+    intentional non-cascading choice), so reactions/comments are cleaned up
+    by hand to avoid orphan rows."""
     with get_connection() as conn:
+        conn.execute("DELETE FROM job_reactions WHERE job_id = ?", (job_id,))
+        conn.execute("DELETE FROM job_comments WHERE job_id = ?", (job_id,))
+        conn.execute("DELETE FROM job_reminders_sent WHERE job_id = ?", (job_id,))
         cursor = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         return cursor.rowcount > 0
 
 
-def create_user(name: str, password_hash: str) -> dict:
-    """Raises sqlite3.IntegrityError (caller turns this into a 409) if the
-    name is already taken — case-insensitive, see the users.name UNIQUE
-    COLLATE NOCASE constraint. A real account, not an auto-created one:
-    the password is the only way back in (see PRD.md Task 3.1)."""
+def create_user(
+    username: str, name: str, email: str, password_hash: str, referred_by_code: str = ""
+) -> dict:
+    """Raises ValueError (caller turns this into a 409) if username or
+    email is already taken (PRD.md Task 6.7 — checked at the application
+    layer since ALTER TABLE couldn't add real UNIQUE constraints for these
+    two after the fact; see _migrate_users_table). Also still subject to
+    the original users.name UNIQUE COLLATE NOCASE constraint from the base
+    schema, which raises sqlite3.IntegrityError instead — the caller
+    catches both. A real account, not an auto-created one: the password is
+    the only way back in (see PRD.md Task 3.1).
+
+    `referred_by_code` (PRD.md Task 6.1) is looked up leniently: an unknown
+    or blank code just registers the account with no referral credit rather
+    than rejecting the signup — a typo'd code shouldn't block someone from
+    joining, matching this codebase's "empty over confidently wrong"
+    principle elsewhere (extractor.py)."""
+    username = username.strip()
     name = name.strip()
+    email = email.strip()
     with get_connection() as conn:
+        if conn.execute(
+            "SELECT 1 FROM users WHERE username = ? COLLATE NOCASE", (username,)
+        ).fetchone():
+            raise ValueError("That username is already taken.")
+        if email and conn.execute(
+            "SELECT 1 FROM users WHERE email = ? COLLATE NOCASE", (email,)
+        ).fetchone():
+            raise ValueError("That email is already registered.")
+        referred_by_user_id = None
+        if referred_by_code.strip():
+            referrer = conn.execute(
+                "SELECT id FROM users WHERE referral_code = ?", (referred_by_code.strip(),)
+            ).fetchone()
+            if referrer:
+                referred_by_user_id = referrer["id"]
+        code = _generate_referral_code(conn)
         cursor = conn.execute(
-            "INSERT INTO users (name, password_hash) VALUES (?, ?)", (name, password_hash)
+            """INSERT INTO users (username, name, email, password_hash,
+                                  referral_code, referred_by_user_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (username, name, email, password_hash, code, referred_by_user_id),
         )
+        if referred_by_user_id is not None:
+            conn.execute(
+                "UPDATE users SET rank_points = rank_points + ? WHERE id = ?",
+                (REFERRAL_POINTS, referred_by_user_id),
+            )
         row = conn.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
         return dict(row)
 
 
-def get_user_by_name(name: str) -> dict | None:
-    name = name.strip()
+def get_user_by_username(username: str) -> dict | None:
+    username = username.strip()
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE name = ? COLLATE NOCASE", (name,)
+            "SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -159,3 +340,255 @@ def get_user(user_id: int) -> dict | None:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return dict(row) if row else None
+
+
+def list_reactions(job_id: int, conn=None) -> list[dict]:
+    query = """SELECT job_reactions.emoji, job_reactions.user_id, users.name AS user_name
+               FROM job_reactions JOIN users ON users.id = job_reactions.user_id
+               WHERE job_reactions.job_id = ?
+               ORDER BY job_reactions.id"""
+    if conn is not None:
+        return [dict(row) for row in conn.execute(query, (job_id,)).fetchall()]
+    with get_connection() as conn:
+        return [dict(row) for row in conn.execute(query, (job_id,)).fetchall()]
+
+
+def toggle_reaction(job_id: int, user_id: int, emoji: str) -> bool:
+    """Adds the reaction if this user hasn't already reacted with this exact
+    emoji on this job, else removes it. Returns True if added, False if
+    removed."""
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM job_reactions WHERE job_id = ? AND user_id = ? AND emoji = ?",
+            (job_id, user_id, emoji),
+        ).fetchone()
+        if existing:
+            conn.execute("DELETE FROM job_reactions WHERE id = ?", (existing["id"],))
+            return False
+        conn.execute(
+            "INSERT INTO job_reactions (job_id, user_id, emoji) VALUES (?, ?, ?)",
+            (job_id, user_id, emoji),
+        )
+        return True
+
+
+_COMMENT_SELECT = """SELECT job_comments.id, job_comments.job_id, job_comments.user_id,
+                             users.name AS user_name, job_comments.body, job_comments.created_at
+                      FROM job_comments JOIN users ON users.id = job_comments.user_id"""
+
+
+def list_comments(job_id: int) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"{_COMMENT_SELECT} WHERE job_comments.job_id = ? ORDER BY job_comments.id",
+            (job_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def add_comment(job_id: int, user_id: int, body: str) -> dict:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO job_comments (job_id, user_id, body) VALUES (?, ?, ?)",
+            (job_id, user_id, body),
+        )
+        row = conn.execute(
+            f"{_COMMENT_SELECT} WHERE job_comments.id = ?", (cursor.lastrowid,)
+        ).fetchone()
+        return dict(row)
+
+
+def delete_comment(job_id: int, comment_id: int, user_id: int) -> str:
+    """Returns 'deleted', 'not_found', or 'forbidden' so the caller
+    (main.py) can map straight to an HTTP status without a second query."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM job_comments WHERE id = ? AND job_id = ?",
+            (comment_id, job_id),
+        ).fetchone()
+        if row is None:
+            return "not_found"
+        if row["user_id"] != user_id:
+            return "forbidden"
+        conn.execute("DELETE FROM job_comments WHERE id = ?", (comment_id,))
+        return "deleted"
+
+
+def update_user_notifications(user_id: int, email: str, opt_in: bool) -> dict | None:
+    """Turning opt_in on (from off, or for the first time ever) resets the
+    digest cursor (last_digest_job_id) to the current max job id — Task
+    4.2's sharing digest reads jobs newer than that cursor, and a fresh
+    opt-in shouldn't dump the board's entire history into someone's first
+    email. Re-saving other fields (e.g. just editing the email) while
+    already opted in leaves the cursor untouched, so no pending digest
+    content gets skipped.
+
+    The cursor is a job id, not a timestamp: jobs.created_at and this
+    column would both come from SQLite's second-granularity datetime('now'),
+    so an opt-in and a job share landing in the same wall-clock second could
+    tie and the job would be silently dropped from the digest. Ids are
+    strictly monotonic and can't collide."""
+    with get_connection() as conn:
+        current = conn.execute(
+            "SELECT reminders_opt_in, last_digest_job_id FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if current is None:
+            return None
+        fresh_opt_in = opt_in and (
+            not current["reminders_opt_in"] or current["last_digest_job_id"] is None
+        )
+        if fresh_opt_in:
+            conn.execute(
+                """UPDATE users SET email = ?, reminders_opt_in = ?,
+                       last_digest_job_id = (SELECT COALESCE(MAX(id), 0) FROM jobs)
+                   WHERE id = ?""",
+                (email, 1 if opt_in else 0, user_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE users SET email = ?, reminders_opt_in = ? WHERE id = ?",
+                (email, 1 if opt_in else 0, user_id),
+            )
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_reminder_recipients() -> list[dict]:
+    """Opted-in users with a real email on file — everything reminders.py
+    needs to send a combined deadline + sharing-digest email (Tasks 4.1 and
+    4.2 share one opt-in, per PRD.md)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name, email, last_digest_job_id FROM users"
+            " WHERE reminders_opt_in = 1 AND email != ''"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_jobs_after_id(since_id: int) -> list[dict]:
+    query = f"SELECT {JOB_SELECT_COLUMNS} {JOB_SELECT_FROM} WHERE jobs.id > ? ORDER BY jobs.id"
+    with get_connection() as conn:
+        rows = conn.execute(query, (since_id,)).fetchall()
+        jobs = [dict(row) for row in rows]
+        for job in jobs:
+            job["reactions"] = list_reactions(job["id"], conn)
+        return jobs
+
+
+def mark_digest_sent(user_id: int) -> None:
+    """Advances this user's digest cursor to the current max job id —
+    called once per daily run for every recipient, regardless of whether
+    there was anything to report or whether delivery succeeded, so the
+    window is always "since the last run" rather than growing unboundedly."""
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE users SET last_digest_job_id = (SELECT COALESCE(MAX(id), 0) FROM jobs)
+               WHERE id = ?""",
+            (user_id,),
+        )
+
+
+def reminder_already_sent(job_id: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM job_reminders_sent WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_reminder_sent(job_id: int) -> None:
+    """Fires once per job, not once per day it stays in the reminder
+    window — see reminders.py."""
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO job_reminders_sent (job_id) VALUES (?)", (job_id,)
+        )
+
+
+def is_admin(user_id: int) -> bool:
+    """Superadmins count as admins too (PRD.md Task 6.9) — one flag isn't
+    downgraded by the other, so a superadmin never loses ordinary admin
+    capabilities (job deletion, the Task 6.2 Admin page)."""
+    user = get_user(user_id)
+    return bool(user and (user["is_admin"] or user["is_superadmin"]))
+
+
+def is_superadmin(user_id: int) -> bool:
+    user = get_user(user_id)
+    return bool(user and user["is_superadmin"])
+
+
+def ensure_admin_by_name(name: str) -> None:
+    """Idempotent — a no-op once the account is already an admin. Called at
+    register/login time (main.py) whenever the signed-in name matches the
+    ADMIN_NAMES env var, so that var takes effect immediately for both
+    brand-new accounts and ones that already existed before it was set —
+    no separate migration or startup scan needed."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE users SET is_admin = 1 WHERE name = ? COLLATE NOCASE AND is_admin = 0",
+            (name,),
+        )
+
+
+def ensure_superadmin_by_name(name: str) -> None:
+    """Same idempotent pattern as ensure_admin_by_name, for SUPERADMIN_NAMES
+    (PRD.md Task 6.9)."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE users SET is_superadmin = 1 WHERE name = ? COLLATE NOCASE AND is_superadmin = 0",
+            (name,),
+        )
+
+
+def list_all_users() -> list[dict]:
+    """Admin user-management list (PRD.md Task 6.2) — every account's
+    public-safe fields plus is_admin/is_superadmin, newest first."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT id, name, username, email, is_admin, is_superadmin,
+                      referral_code, rank_points, created_at
+               FROM users ORDER BY id DESC"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def set_user_admin(user_id: int, is_admin_flag: bool) -> dict | None:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE users SET is_admin = ? WHERE id = ?", (1 if is_admin_flag else 0, user_id)
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row)
+
+
+def delete_user(user_id: int) -> bool:
+    """Superadmin-only (PRD.md Task 6.9). Jobs the user shared are kept —
+    the board is shared community content, not exclusively theirs — but
+    orphaned to shared_by_user_id = NULL, the same "legacy display name"
+    state pre-Task-3.1 rows already use (see JOB_SELECT_COLUMNS' COALESCE).
+    Their own reactions/comments are removed outright (tied to identity,
+    a "ghost" reaction from a deleted account doesn't mean anything), and
+    anyone who used this account's referral code has referred_by_user_id
+    cleared rather than left dangling."""
+    with get_connection() as conn:
+        conn.execute("UPDATE jobs SET shared_by_user_id = NULL WHERE shared_by_user_id = ?", (user_id,))
+        conn.execute("UPDATE users SET referred_by_user_id = NULL WHERE referred_by_user_id = ?", (user_id,))
+        conn.execute("DELETE FROM job_reactions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM job_comments WHERE user_id = ?", (user_id,))
+        cursor = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        return cursor.rowcount > 0
+
+
+def list_leaderboard(limit: int = 20) -> list[dict]:
+    """Top users by rank_points (PRD.md Task 6.1) — referrals plus jobs
+    shared. Ties broken by earliest account (lower id) rather than
+    arbitrarily, so the ordering is stable across calls."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name, rank_points FROM users ORDER BY rank_points DESC, id ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]

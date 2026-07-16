@@ -1,7 +1,7 @@
 import './mascot.css'
 
 /**
- * Applio — the Appliora assistant mascot.
+ * Applio — the DevCareer assistant mascot.
  *
  * A friendly young professional with fluffy dark hair, expressive brown
  * eyes and a warm smile, wearing a teal hoodie with a minimalist "A"

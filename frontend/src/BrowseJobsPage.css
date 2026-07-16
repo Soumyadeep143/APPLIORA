@@ -1,0 +1,8 @@
+/* Page-specific layout only — job-card/reaction/comment styling is shared
+   with the rest of the app via index.css (many of those same classes were
+   already relied on elsewhere before this page was split into its own
+   file, so duplicating them here would just be two copies to keep in sync
+   for no benefit). */
+.feed {
+  animation: cardIn var(--duration-slow) var(--ease-spring) backwards;
+}

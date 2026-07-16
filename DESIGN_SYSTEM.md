@@ -1,4 +1,4 @@
-# Appliora — Design System
+# DevCareer — Design System
 
 This documents the visual system that already exists in the codebase
 (`frontend/src/index.css`, `mascot.css`, `Mascot.jsx`, `public/favicon.svg`)
@@ -125,9 +125,11 @@ that animates — see the existing handling in `mascot.css` for the pattern.
 
 - Visible focus state on every interactive element (already the case via
   `--accent-soft` ring — don't remove it for aesthetics).
-- Icon-only buttons need a real `aria-label`, not just `title` (currently a
-  gap on the delete `✕` button — screen readers may not reliably announce
-  `title`). Fix opportunistically when touching that component.
+- Icon-only buttons need a real `aria-label`, not just `title` — screen
+  readers may not reliably announce `title`. Fixed on the delete `✕` button
+  (Task 3.3) and the emoji reaction buttons (2026-07-16 polish pass, which
+  also added `aria-pressed` since each is a toggle). Keep this bar for any
+  new icon-only control.
 - Status conveyed by color (deadline badges) also has a text label
   ("Apply by ...", "Closed ...") — never color alone. Keep that pattern for
   any new status UI.

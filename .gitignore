@@ -11,6 +11,9 @@ env/
 
 # Databases & local state storage
 *.db
+*.db-journal
+*.sqlite
+*.sqlite3
 
 # Private keys and config secrets
 .env
@@ -22,20 +25,40 @@ backend/.env
 node_modules/
 dist/
 dist-ssr/
+.vite/
 *.local
 
-# Testing and cache
+# Testing, coverage and lint caches
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 .eslintcache
 .cache/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Scheduled reminders script output (backend/app/reminders.py)
+backend/reminders.log
+*.log
+
+# Editor swap/backup files
+*.swp
+*.swo
+*~
+*.bak
+*.tmp
+
 # IDE/System specific
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini
 
-
+# Claude Code — .claude/settings.json is shared project config (kept
+# tracked); settings.local.json is per-machine and shouldn't be.
+.claude/settings.local.json

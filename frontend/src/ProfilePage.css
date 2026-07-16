@@ -1,0 +1,90 @@
+/* Dedicated Profile page (PRD.md Task 6.8) — same visual system as
+   LoginPage.css/AdminPage.css (Landing's navy/orange theme). */
+.profile-page {
+  min-height: 60vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 16px;
+}
+
+.profile-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: var(--shadow-md);
+  padding: 40px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  animation: cardIn var(--duration-slow) var(--ease-spring) backwards;
+}
+
+.profile-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  color: #fff;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 1.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.profile-card h1 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.3rem;
+  color: var(--ink);
+  margin: 0;
+  text-align: center;
+}
+
+.profile-username {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.profile-fields {
+  width: 100%;
+  margin: 20px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.profile-fields > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.88rem;
+}
+
+.profile-fields dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.profile-fields dd {
+  margin: 0;
+  color: var(--ink);
+  text-align: right;
+}
+
+.profile-fields code {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  padding: 2px 7px;
+  border-radius: 6px;
+}

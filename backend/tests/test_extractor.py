@@ -119,6 +119,36 @@ def test_field_confidence_low_for_title_split_company():
     assert result["field_confidence"]["company"] == "low"
 
 
+COMPOUND_HYPHENATED_TITLE_PAGE = """
+<html><head>
+<title>Technology & Transformation - Engineering - Senior Consultant - Python Data Engineer - Bangalore</title>
+<meta property="og:title" content="Technology & Transformation - Engineering - Senior Consultant - Python Data Engineer - Bangalore" />
+<meta property="og:description" content="Join our Technology & Transformation practice." />
+</head><body>No deadline text here.</body></html>
+"""
+
+
+def test_multi_segment_title_not_mistaken_for_title_dash_company():
+    """Real bug (found live against southasiacareers.deloitte.com, 2026-07-16):
+    a title with several meaningful hyphen-separated segments — department,
+    level, specialisation, location — isn't the "Role - Company" shape the
+    text-split heuristic targets. Blindly taking the last segment as company
+    picked up "Bangalore" (a location); blindly taking the first segment as
+    the whole title threw away the rest of the real title. Splitting should
+    only fire on an exact two-part shape; here it should leave both fields
+    alone and let the domain-based fallback (deloitte.com -> "Deloitte")
+    supply the company instead."""
+    result = _extract_from_html(
+        COMPOUND_HYPHENATED_TITLE_PAGE,
+        "https://southasiacareers.deloitte.com/job/Bengaluru-Technology-1/1",
+    )
+    assert result["title"] == (
+        "Technology & Transformation - Engineering - Senior Consultant - "
+        "Python Data Engineer - Bangalore"
+    )
+    assert result["company"] == "Deloitte"
+
+
 def test_field_confidence_low_for_domain_fallback_company():
     import requests as requests_lib
 
@@ -221,6 +251,47 @@ def test_ai_preferred_host_skips_local_fetch_when_ai_succeeds():
     assert result["fetch_ok"] is True
     assert any("AI-assisted" in note for note in result["notes"])
     # AI is the deliberately chosen primary source for these hosts — high confidence.
+    assert result["field_confidence"]["title"] == "high"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.linkedin.com/jobs/view/999",
+        "https://www.naukri.com/job-listings-staff-engineer-123",
+        "https://www.indeed.com/viewjob?jk=abc123",
+        "https://in.indeed.com/viewjob?jk=abc123",
+        "https://jobs.lever.co/notion/abc-123",
+        "https://jobs.ashbyhq.com/acme/def-456",
+        "https://www.smartrecruiters.com/Acme/789-staff-engineer",
+        "https://jobs.smartrecruiters.com/Acme/789-staff-engineer",
+    ],
+)
+def test_ai_preferred_hosts_all_route_through_ai_extraction(url):
+    """BACKEND_VERIFICATION_ROADMAP.md flagged these five hosts (LinkedIn
+    already had a dedicated test) as having zero regression coverage for the
+    prefer_ai routing decision itself — a typo'd or accidentally-removed
+    entry in AI_PREFERRED_HOSTS would silently revert that host to the local
+    pipeline, which Task 2.1 found to be either robots.txt-violating
+    (Naukri/Indeed) or confidently wrong/empty (Lever/AshbyHQ/SmartRecruiters),
+    with nothing catching it. This asserts every host (plus a couple of
+    realistic www./subdomain variants) still takes the AI-first path and
+    never even attempts the local requests.get fetch."""
+    ai_fields = {
+        "title": "Staff Engineer",
+        "company": "Acme",
+        "description": "Build the core platform.",
+        "deadline": "",
+        "location": "",
+    }
+    with patch(
+        "app.extractor.ai_extractor.ai_extract_job_metadata", return_value=ai_fields
+    ), patch("app.extractor.requests.get") as mock_get:
+        result = extract_job_metadata(url)
+
+    mock_get.assert_not_called()
+    assert result["title"] == "Staff Engineer"
+    assert result["fetch_ok"] is True
     assert result["field_confidence"]["title"] == "high"
 
 
@@ -352,6 +423,82 @@ def test_extract_from_pasted_text_without_structure_degrades_gracefully():
     assert result["company"] == ""
     # No "Role:" label found -> bare first-line guess, lowest confidence tier.
     assert result["field_confidence"]["title"] == "low"
+
+
+CRED_HIRING_POST = """🚀 CRED Mass Hiring | Agentic Engineer Interns
+
+🏢 Company: CRED
+💼 Role: Agentic Engineer Interns
+📍 Location: Bangalore,India
+
+🔥 Mass Hiring for students passionate about AI Agents, LLMs, and Agentic AI.
+
+💰 Competitive Stipend
+🎯 PPO Offer after successful internship based on performance.
+
+📩 How to Apply: Send your Resume + GitHub Project Links
+📝 Email Subject: Intern
+📧 Send Email: Prakash.Iyer@cred.club
+"""
+
+
+def test_extract_from_pasted_text_detects_apply_email_separately_from_url():
+    """Real user-provided example: a forwarded hiring post with no
+    application URL at all, only an email address to send a resume to.
+    Task 2.4: url and apply_email are independent fields — a post can have
+    a link, an email, or both — so this fills apply_email (plus the post's
+    own 'Email Subject:' line) and leaves url genuinely empty rather than
+    smuggling a mailto: into the url field."""
+    result = extract_job_metadata_from_text(CRED_HIRING_POST)
+    assert result["url"] == ""
+    assert result["apply_email"] == "Prakash.Iyer@cred.club"
+    assert result["apply_email_subject"] == "Intern"
+    # Also regression-covers the emoji-bulleted "💼 Role: ..." / "🏢 Company: ..."
+    # / "📍 Location: ..." label format itself, found via this same real
+    # example — LEADING_LABEL_RE previously required the label at position 0,
+    # so a leading emoji made it fall through to the pipe-split fallback and
+    # mis-parse "Agentic Engineer Interns" as the *company*, not the title.
+    assert result["title"] == "Agentic Engineer Interns"
+    assert result["company"] == "CRED"
+    assert result["location"] == "Bangalore,India"
+    assert any("apply-by-email" in note for note in result["notes"])
+
+
+def test_pasted_text_apply_email_without_subject_line():
+    text = (
+        "Role: Data Analyst at Acme\n\n"
+        "Interested candidates can email their resume to jobs@acme.com to apply.\n"
+    )
+    result = extract_job_metadata_from_text(text)
+    assert result["apply_email"] == "jobs@acme.com"
+    assert result["apply_email_subject"] == ""
+    assert result["url"] == ""
+
+
+def test_pasted_text_incidental_email_without_apply_keyword_is_ignored():
+    """An email mentioned for an unrelated reason (no apply/send/resume/
+    contact keyword on that line) must not be mistaken for the application
+    address — avoids a false positive misreporting apply_email."""
+    text = (
+        "Role: Data Analyst at Acme\n\n"
+        "Reference ID: analyst-2026@internal-tracking.acme.com\n"
+        "We are hiring a data analyst for our platform team."
+    )
+    result = extract_job_metadata_from_text(text)
+    assert result["apply_email"] == ""
+
+
+def test_pasted_text_can_have_both_a_real_url_and_an_apply_email():
+    """"Or both" (Task 2.4): a post naming a real link AND an email address
+    should surface both independently, not force a choice between them."""
+    text = (
+        "Role: Data Analyst at Acme\n\n"
+        "Apply here: https://acme.com/careers/data-analyst\n"
+        "Or send your resume by email to hr@acme.com\n"
+    )
+    result = extract_job_metadata_from_text(text)
+    assert result["url"] == "https://acme.com/careers/data-analyst"
+    assert result["apply_email"] == "hr@acme.com"
 
 
 def test_normalise_date():

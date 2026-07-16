@@ -1,5 +1,5 @@
 // API base: empty in dev (vite proxy handles it); set VITE_API_URL in
-// production to the deployed backend origin, e.g. https://appliora.onrender.com
+// production to the deployed backend origin, e.g. https://devcareer.onrender.com
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
 async function request(path, options = {}) {
@@ -26,16 +26,16 @@ async function request(path, options = {}) {
 export const extractJob = (payload) =>
   request('/api/extract', { method: 'POST', body: JSON.stringify(payload) })
 
-export const register = (name, password) =>
+export const register = (username, name, email, password, referralCode = '') =>
   request('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ username, name, email, password, referral_code: referralCode }),
   })
 
-export const login = (name, password) =>
+export const login = (username, password) =>
   request('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ username, password }),
   })
 
 export const listJobs = (search = '') =>
@@ -44,5 +44,44 @@ export const listJobs = (search = '') =>
 export const createJob = (job) =>
   request('/api/jobs', { method: 'POST', body: JSON.stringify(job) })
 
-export const deleteJob = (id) =>
-  request(`/api/jobs/${id}`, { method: 'DELETE' })
+export const deleteJob = (id, adminUserId) =>
+  request(`/api/jobs/${id}?admin_user_id=${adminUserId}`, { method: 'DELETE' })
+
+export const toggleReaction = (jobId, userId, emoji) =>
+  request(`/api/jobs/${jobId}/reactions`, {
+    method: 'POST',
+    body: JSON.stringify({ user_id: userId, emoji }),
+  })
+
+export const listComments = (jobId) => request(`/api/jobs/${jobId}/comments`)
+
+export const postComment = (jobId, userId, body) =>
+  request(`/api/jobs/${jobId}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({ user_id: userId, body }),
+  })
+
+export const deleteComment = (jobId, commentId, userId) =>
+  request(`/api/jobs/${jobId}/comments/${commentId}?user_id=${userId}`, { method: 'DELETE' })
+
+export const updateNotificationSettings = (userId, email, optIn) =>
+  request(`/api/users/${userId}/notifications`, {
+    method: 'PATCH',
+    body: JSON.stringify({ email, opt_in: optIn }),
+  })
+
+export const getLeaderboard = () => request('/api/leaderboard')
+
+export const listAdminUsers = (adminUserId) =>
+  request(`/api/admin/users?admin_user_id=${adminUserId}`)
+
+export const setUserAdmin = (userId, adminUserId, isAdmin) =>
+  request(`/api/admin/users/${userId}/admin?admin_user_id=${adminUserId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ is_admin: isAdmin }),
+  })
+
+export const removeUser = (userId, superadminUserId) =>
+  request(`/api/superadmin/users/${userId}?superadmin_user_id=${superadminUserId}`, {
+    method: 'DELETE',
+  })

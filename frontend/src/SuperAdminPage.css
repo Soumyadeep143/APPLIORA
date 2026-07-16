@@ -1,0 +1,76 @@
+/* Dedicated Super Admin page (PRD.md Task 6.9) — same visual system as
+   AdminPage.css, wider table (one more column) plus a danger-styled
+   "Remove user" action. */
+.superadmin-page {
+  min-height: 60vh;
+  display: flex;
+  justify-content: center;
+  padding: 48px 16px;
+}
+
+.superadmin-page-card {
+  width: 100%;
+  max-width: 900px;
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: var(--shadow-md);
+  padding: 36px 40px;
+  animation: cardIn var(--duration-slow) var(--ease-spring) backwards;
+}
+
+.superadmin-page-card h1 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.4rem;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.superadmin-page-subtitle {
+  margin: 0 0 24px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.superadmin-table-wrap {
+  overflow-x: auto;
+}
+
+.superadmin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.superadmin-table th {
+  text-align: left;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--line);
+}
+
+.superadmin-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.superadmin-table tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-badge.superadmin {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+}
+
+button.ghost.small.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}

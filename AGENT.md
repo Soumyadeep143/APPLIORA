@@ -81,11 +81,16 @@ requirements.txt pytest httpx`.
   copy of shared state. `Landing.jsx`'s header is the one persistent nav
   across every page. Follow this shape for any new page rather than adding
   another conditional section inside an existing one.
-- Admin accounts (PRD.md Task 6.2) are granted via the `ADMIN_NAMES` env var
-  (comma-separated, case-insensitive, checked at register/login) — there's
-  no seed script and no "first admin" special case in code. To make someone
-  an admin locally, either add their name to `ADMIN_NAMES` and have them
-  log in again, or set `users.is_admin = 1` directly in the dev DB.
+- Superadmin exists exactly once, seeded at startup from the
+  `MASTER_SUPERADMIN_USERNAME` / `MASTER_SUPERADMIN_PASSWORD` env vars
+  (`backend/.env`, gitignored — never hardcoded in source). There's no other
+  way to become superadmin. Regular admin accounts can only be granted by
+  logging in as that superadmin and promoting someone via `PATCH
+  /api/admin/users/{id}/admin` — registration alone never grants either
+  role. (The previous `ADMIN_NAMES`/`SUPERADMIN_NAMES` env-var mechanism,
+  which matched a registering/logging-in account's display `name`, was
+  removed — `name` isn't unique, so anyone could register an account with a
+  matching name and get auto-promoted.)
 - No comments explaining *what* code does. Comments here explain *why*
   something non-obvious is true (see the `refreshSeq` ref in `App.jsx`, or
   the aggregator-substring-check comment in `extractor.py`) — match that

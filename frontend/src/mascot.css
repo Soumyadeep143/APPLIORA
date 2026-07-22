@@ -441,19 +441,15 @@
   }
 }
 
-@media (max-width: 640px) {
+/* Below 720px there's no safe corner for a fixed floating widget: the
+   auth cards (LoginPage/SignupPage) and the Home sections (landing.css)
+   both run edge-to-edge on a single-column mobile layout, so shrinking
+   or repositioning it (tried both) still lands it on top of real content
+   — confirmed covering the Login submit button, Signup's form fields, and
+   How it works' step text. Same breakpoint the mobile Dock (Dock.jsx) and
+   drawer nav already use. */
+@media (max-width: 720px) {
   .mascot {
-    right: 10px;
-    bottom: 10px;
-  }
-
-  .mascot-svg {
-    width: 84px;
-    height: 84px;
-  }
-
-  .mascot-bubble {
-    max-width: 170px;
-    font-size: 0.78rem;
+    display: none;
   }
 }

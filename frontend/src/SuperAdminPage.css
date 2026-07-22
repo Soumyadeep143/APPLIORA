@@ -74,3 +74,13 @@ button.ghost.small.danger {
   color: var(--danger);
   border-color: var(--danger);
 }
+
+@media (max-width: 480px) {
+  .superadmin-page {
+    padding: 28px 12px;
+  }
+
+  .superadmin-page-card {
+    padding: 24px 20px;
+  }
+}

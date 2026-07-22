@@ -88,3 +88,354 @@
   padding: 2px 7px;
   border-radius: 6px;
 }
+
+/* ---------- reminders toggle (PRD.md Task 6.16) ---------- */
+.reminders-row {
+  width: 100%;
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.reminders-icon-wrap {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(15, 41, 66, 0.06);
+}
+
+.reminders-icon-wrap.on {
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+}
+
+/* The "yellow light" — only rendered in the DOM at all when reminders are
+   on, so off genuinely means no blink rather than a paused animation. */
+.reminders-blink-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #facc15;
+  box-shadow: 0 0 0 2px var(--surface);
+  animation: remindersBlink 1.1s ease-in-out infinite;
+}
+
+@keyframes remindersBlink {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 4px 1px rgba(250, 204, 21, 0.8), 0 0 0 2px var(--surface);
+  }
+  50% {
+    opacity: 0.35;
+    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0), 0 0 0 2px var(--surface);
+  }
+}
+
+.reminders-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.reminders-label {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.reminders-sub {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+}
+
+.reminders-switch {
+  flex-shrink: 0;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(15, 41, 66, 0.16);
+  border: none;
+  box-shadow: none;
+  padding: 3px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.reminders-switch:hover:not(:disabled) {
+  transform: none;
+}
+
+.reminders-switch.on {
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+}
+
+.reminders-switch-knob {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 41, 66, 0.3);
+  transition: transform var(--duration-fast) var(--ease-spring);
+}
+
+.reminders-switch.on .reminders-switch-knob {
+  transform: translateX(18px);
+}
+
+/* ---------- read-only view (PublicProfilePage.jsx) ---------- */
+.profile-target-role {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.profile-bio {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.profile-skills {
+  width: 100%;
+  margin: 12px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.skill-chip {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
+.social-links-view {
+  width: 100%;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+/* ---------- social links ---------- */
+.social-links {
+  width: 100%;
+  margin: 22px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.social-links-title {
+  margin: 0 0 2px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.social-links-title ~ .social-links-title {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.profile-textfield {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.profile-textfield textarea {
+  resize: vertical;
+  font-size: 0.85rem;
+}
+
+.social-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.social-input-row input {
+  flex: 1;
+  font-size: 0.85rem;
+}
+
+.social-icon-link {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  transition: transform var(--duration-fast) var(--ease-spring);
+}
+
+a.social-icon-link:hover {
+  transform: translateY(-1px) scale(1.05);
+}
+
+.social-icon-link.disabled {
+  color: var(--muted);
+  background: rgba(15, 41, 66, 0.06);
+  cursor: default;
+}
+
+/* ---------- logout ---------- */
+.profile-logout {
+  margin-top: 22px;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* `button` prefix matches (and beats) index.css's button.ghost:hover
+   specificity — otherwise that rule's own color: var(--accent-dark) on
+   hover would win over this one. */
+button.profile-logout:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.08);
+  color: var(--danger);
+}
+
+/* Custom in-page confirmation (not window.prompt/window.confirm) so it can
+   be centered, styled, and blink red for urgency — PRD.md Task 6.12.
+   z-index comfortably above the navbar's 100 (landing.css) so it sits over
+   everything regardless of which page it's opened from. */
+.logout-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 41, 66, 0.55);
+  animation: logoutOverlayIn var(--duration-fast) var(--ease-standard);
+}
+
+@keyframes logoutOverlayIn {
+  from {
+    opacity: 0;
+  }
+}
+
+.logout-modal {
+  width: 100%;
+  max-width: 360px;
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 28px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation:
+    cardIn var(--duration-slow) var(--ease-spring) backwards,
+    logoutModalBlink 1s ease-in-out infinite;
+}
+
+@keyframes logoutModalBlink {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15), var(--shadow-md);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.65), var(--shadow-md);
+  }
+}
+
+.logout-modal-warning {
+  margin: 0;
+  text-align: center;
+  font-weight: 700;
+  color: var(--danger);
+  animation: logoutTextBlink 1s ease-in-out infinite;
+}
+
+@keyframes logoutTextBlink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.logout-modal input {
+  text-align: center;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.logout-modal-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.logout-modal-actions button {
+  flex: 1;
+}
+
+.profile-logout-confirm {
+  background: linear-gradient(135deg, var(--danger), #a51c1c);
+  box-shadow: 0 3px 12px rgba(220, 38, 38, 0.35);
+}
+
+.profile-logout-confirm:hover:not(:disabled) {
+  box-shadow: 0 8px 20px rgba(220, 38, 38, 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logout-modal-overlay,
+  .logout-modal,
+  .logout-modal-warning,
+  .reminders-blink-dot {
+    animation: none !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .profile-page {
+    padding: 32px 12px;
+  }
+
+  .profile-card {
+    padding: 24px 20px;
+  }
+
+  .social-input-row {
+    gap: 8px;
+  }
+
+  .logout-modal {
+    padding: 22px 18px;
+  }
+}

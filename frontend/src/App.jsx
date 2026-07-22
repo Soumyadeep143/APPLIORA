@@ -3,19 +3,21 @@ import {
   createJob,
   deleteJob,
   extractJob,
-  getLeaderboard,
   listJobs,
   login,
   register,
   toggleReaction,
-  updateNotificationSettings,
+  updateJob,
 } from './api'
 import AddJobPage from './AddJobPage'
 import AdminPage from './AdminPage'
 import BrowseJobsPage from './BrowseJobsPage'
+import LeaderboardPage from './LeaderboardPage'
 import LoginPage from './LoginPage'
+import { getPasswordError } from './passwordRules'
 import SignupPage from './SignupPage'
 import ProfilePage from './ProfilePage'
+import PublicProfilePage from './PublicProfilePage'
 import SuperAdminPage from './SuperAdminPage'
 import Mascot from './Mascot'
 
@@ -26,162 +28,22 @@ import Mascot from './Mascot'
 // files for one regex, per PRD.md Task 6.4's page-file split.
 const URL_INPUT_RE = /^https?:\/\/\S+$/i
 
-function NotificationSettings({ user, onUpdate }) {
-  const [open, setOpen] = useState(false)
-  const [email, setEmail] = useState(user.email || '')
-  const [optIn, setOptIn] = useState(!!user.reminders_opt_in)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [error, setError] = useState('')
-  // Click anywhere outside the panel closes it — it was previously only
-  // dismissible via the toggle button, so it could sit open indefinitely
-  // on top of the page (see the "go down" bug report: saving didn't close
-  // it either, fixed below in handleSave). Shared with RankPanel below,
-  // which uses the same popover pattern.
-  const wrapperRef = useOutsideClose(open, setOpen)
+// Success-pause duration (Mascot.jsx's happy mood) before navigating away
+// on a successful login/signup — long enough to actually see, short
+// enough not to feel like a delay.
+const SUCCESS_PAUSE_MS = 700
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-  async function handleSave(event) {
-    event.preventDefault()
-    setSaving(true)
-    setError('')
-    try {
-      const updated = await updateNotificationSettings(user.id, email.trim(), optIn)
-      onUpdate(updated)
-      setSaved(true)
-      setTimeout(() => {
-        setSaved(false)
-        setOpen(false)
-      }, 900)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="notif-settings" ref={wrapperRef}>
-      <button type="button" className="ghost small" onClick={() => setOpen((value) => !value)}>
-        🔔 Reminders
-      </button>
-      {open && (
-        <form className="notif-panel" onSubmit={handleSave}>
-          <label>
-            Email
-            <input
-              type="email"
-              value={email}
-              maxLength={200}
-              placeholder="you@example.com"
-              onChange={(event) => setEmail(event.target.value)}
-            />
-          </label>
-          <label className="notif-checkbox">
-            <input
-              type="checkbox"
-              checked={optIn}
-              onChange={(event) => setOptIn(event.target.checked)}
-            />
-            Email me daily about deadlines closing soon and new jobs friends share
-          </label>
-          {error && <p className="comment-error">{error}</p>}
-          <button type="submit" disabled={saving}>
-            {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
-          </button>
-        </form>
-      )}
-    </div>
-  )
-}
-
-function useOutsideClose(open, setOpen) {
-  const wrapperRef = useRef(null)
-  useEffect(() => {
-    if (!open) return
-    function handleOutsideClick(event) {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleOutsideClick)
-    return () => document.removeEventListener('mousedown', handleOutsideClick)
-  }, [open, setOpen])
-  return wrapperRef
-}
-
-function RankPanel({ user }) {
-  const [open, setOpen] = useState(false)
-  const [board, setBoard] = useState(null)
-  const [copied, setCopied] = useState(false)
-  const wrapperRef = useOutsideClose(open, setOpen)
-
-  useEffect(() => {
-    if (!open || board !== null) return
-    getLeaderboard()
-      .then(setBoard)
-      .catch(() => setBoard([]))
-  }, [open, board])
-
-  async function handleCopyCode() {
-    try {
-      await navigator.clipboard.writeText(user.referral_code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1800)
-    } catch {
-      /* clipboard permission denied — the code is still shown to copy by hand */
-    }
-  }
-
-  return (
-    <div className="notif-settings" ref={wrapperRef}>
-      <button type="button" className="ghost small" onClick={() => setOpen((value) => !value)}>
-        🏆 Rank {user.rank_points > 0 && `· ${user.rank_points}`}
-      </button>
-      {open && (
-        <div className="notif-panel rank-panel">
-          <p className="rank-points">
-            <strong>{user.rank_points}</strong> points
-          </p>
-          <label>
-            Your referral code — friends who sign up with it earn you points
-            <span className="referral-code-row">
-              <code>{user.referral_code}</code>
-              <button type="button" className="icon-btn small" onClick={handleCopyCode}>
-                {copied ? 'Copied ✓' : 'Copy'}
-              </button>
-            </span>
-          </label>
-          <p className="rank-leaderboard-title">Leaderboard</p>
-          {board === null ? (
-            <p className="muted">Loading…</p>
-          ) : (
-            <ol className="rank-leaderboard">
-              {board.map((row) => (
-                <li key={row.id} className={row.id === user.id ? 'me' : ''}>
-                  <span>{row.name}</span>
-                  <span>{row.rank_points}</span>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-export default function App({ activeView, onNavigate, search, onSearchChange, onUserChange }) {
-  // Real account (name + bcrypt-hashed password, PRD Task 3.1): {id, name}
-  // from POST /api/auth/register or /api/auth/login, remembered in
-  // localStorage — no session/token beyond that.
-  const [user, setUser] = useState(() => {
-    try {
-      const raw = localStorage.getItem('devcareer_user')
-      return raw ? JSON.parse(raw) : null
-    } catch {
-      return null
-    }
-  })
+export default function App({
+  activeView,
+  onNavigate,
+  search,
+  onSearchChange,
+  user,
+  setUser,
+  viewedProfileUserId,
+  onViewProfile,
+}) {
   // Login and Signup (PRD.md Task 6.7) are separate pages with separate
   // field sets now, not one form with a mode toggle — separate state per
   // form rather than one shared set that only some fields use.
@@ -193,6 +55,11 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
   const [signupPassword, setSignupPassword] = useState('')
   const [signupReferralCode, setSignupReferralCode] = useState('')
   const [loggingIn, setLoggingIn] = useState(false)
+  // Brief happy-mascot beat before navigating away on success (Mascot.jsx)
+  // — without this, a successful login/signup redirects immediately and
+  // the reaction is never actually visible.
+  const [signupSucceeded, setSignupSucceeded] = useState(false)
+  const [loginSucceeded, setLoginSucceeded] = useState(false)
   const [linkInput, setLinkInput] = useState('')
   const [fetching, setFetching] = useState(false)
   const [draft, setDraft] = useState(null)
@@ -232,27 +99,21 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
     return () => clearTimeout(timer)
   }, [search, refresh])
 
-  useEffect(() => {
-    if (user) localStorage.setItem('devcareer_user', JSON.stringify(user))
-    else localStorage.removeItem('devcareer_user')
-  }, [user])
-
-  // Mirrors this component's user state up to Root — App still owns the
-  // real read/write cycle (login/register/switch all happen here), but
-  // Landing's nav needs to know is_admin to show/hide the Admin link, and
-  // Landing and App are siblings under Root, not parent/child.
-  useEffect(() => {
-    onUserChange(user)
-  }, [user, onUserChange])
-
   // Signed-out visitors can see Home (including Trending) but not the real
-  // Browse Jobs / Add Job / Profile pages (PRD.md Task 6.8, a reversal of
-  // the earlier "browse without signing in" call) — bounced to Login
-  // instead. A render-phase redirect would be a React anti-pattern (side
-  // effect during render), hence the effect rather than an early return
-  // that itself calls onNavigate.
+  // Browse Jobs / Add Job / Profile / Leaderboard pages (PRD.md Task 6.8, a
+  // reversal of the earlier "browse without signing in" call) — bounced to
+  // Login instead. A render-phase redirect would be a React anti-pattern
+  // (side effect during render), hence the effect rather than an early
+  // return that itself calls onNavigate.
   useEffect(() => {
-    if (!user && (activeView === 'board' || activeView === 'share' || activeView === 'profile')) {
+    if (
+      !user &&
+      (activeView === 'board' ||
+        activeView === 'share' ||
+        activeView === 'profile' ||
+        activeView === 'leaderboard' ||
+        activeView === 'public-profile')
+    ) {
       onNavigate('login')
     }
   }, [user, activeView, onNavigate])
@@ -267,6 +128,11 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
     event.preventDefault()
     if (!signupUsername.trim() || !signupName.trim() || !signupEmail.trim() || !signupPassword.trim())
       return
+    const passwordError = getPasswordError(signupPassword)
+    if (passwordError) {
+      setError(passwordError)
+      return
+    }
     setLoggingIn(true)
     setError('')
     try {
@@ -277,6 +143,8 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
         signupPassword,
         signupReferralCode.trim()
       )
+      setSignupSucceeded(true)
+      await wait(SUCCESS_PAUSE_MS)
       // Deliberately doesn't sign the new account in (PRD.md Task 6.8) —
       // land on Login with the username already filled in so the only
       // thing left to type is the password just chosen.
@@ -288,6 +156,7 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
       setSignupReferralCode('')
       setToast('Successfully signed up! Log in to continue.')
       onNavigate('login')
+      setSignupSucceeded(false)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -300,13 +169,20 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
     if (!loginUsername.trim() || !loginPassword.trim()) return
     setLoggingIn(true)
     setError('')
+    // Clears a leftover toast from an earlier action (e.g. the signup
+    // redirect's "Successfully signed up!") so Mascot.jsx can't show a
+    // false happy reaction for a login attempt that hasn't resolved yet.
+    setToast('')
     try {
       const result = await login(loginUsername.trim(), loginPassword)
       setUser(result)
+      setLoginSucceeded(true)
+      await wait(SUCCESS_PAUSE_MS)
       setLoginUsername('')
       setLoginPassword('')
       setToast('Successfully logged in!')
       onNavigate('board')
+      setLoginSucceeded(false)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -314,7 +190,11 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
     }
   }
 
-  function handleSwitchUser() {
+  // Logout lives on the Profile page now (PRD.md Task 6.12), not a navbar
+  // Switch button — ProfilePage's own modal handles the typed YES/Y
+  // confirmation before this ever gets called, so this is just the actual
+  // sign-out action.
+  function handleLogout() {
     setUser(null)
     onNavigate('login')
   }
@@ -400,6 +280,16 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
     }
   }
 
+  // Admin-only server-side too (PRD.md Task 6.10) — JobEditForm's own Save
+  // button only renders for admins, so a non-admin can't reach this path
+  // anyway. Deliberately doesn't catch here: JobEditForm awaits this and
+  // shows the error inline in its own form instead of the page-level
+  // banner, same as CommentThread does with postComment.
+  async function handleModify(jobId, fields) {
+    const updated = await updateJob(jobId, fields, user.id)
+    setJobs((current) => current.map((item) => (item.id === jobId ? updated : item)))
+  }
+
   async function handleReact(job, emoji) {
     if (!user) {
       setError('Please log in to react.')
@@ -429,8 +319,16 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
   if (activeView === 'home') return null
 
   // Render-phase half of the redirect guard above — avoids a flash of the
-  // real board/share content for a split second before the effect fires.
-  if (!user && (activeView === 'board' || activeView === 'share')) return null
+  // real board/share/leaderboard content for a split second before the
+  // effect fires.
+  if (
+    !user &&
+    (activeView === 'board' ||
+      activeView === 'share' ||
+      activeView === 'leaderboard' ||
+      activeView === 'public-profile')
+  )
+    return null
 
   if (activeView === 'login') {
     return (
@@ -442,9 +340,11 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
         loading={loggingIn}
         error={error}
         toast={toast}
+        succeeded={loginSucceeded}
         onSubmit={handleLoginSubmit}
         onGoToSignup={() => {
           setError('')
+          setLoginSucceeded(false)
           onNavigate('signup')
         }}
       />
@@ -466,9 +366,11 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
         setReferralCode={setSignupReferralCode}
         loading={loggingIn}
         error={error}
+        succeeded={signupSucceeded}
         onSubmit={handleSignupSubmit}
         onGoToLogin={() => {
           setError('')
+          setSignupSucceeded(false)
           onNavigate('login')
         }}
       />
@@ -493,7 +395,16 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
 
   if (activeView === 'profile') {
     if (!user) return null // guard effect above redirects to Login
-    return <ProfilePage user={user} />
+    return <ProfilePage user={user} onLogout={handleLogout} onUpdate={setUser} />
+  }
+
+  if (activeView === 'public-profile') {
+    if (!user) return null // guard effect above redirects to Login
+    return <PublicProfilePage userId={viewedProfileUserId} />
+  }
+
+  if (activeView === 'leaderboard') {
+    return <LeaderboardPage user={user} onViewProfile={onViewProfile} />
   }
 
   if (activeView === 'superadmin') {
@@ -540,40 +451,12 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
     mascotMessage = "Hi, I'm Applio! Found a job you like? Paste the link and I'll fetch the details."
   }
 
+  // Identity/reminders/switch live in Landing's persistent header now
+  // (PRD.md Task 6.10) — it's the one nav shown on every page, so repeating
+  // an identity bar here was redundant and, per that task, explicitly
+  // shouldn't show on Browse Jobs/Add Job at all.
   return (
     <div className="page" id="app">
-      <header className="topbar">
-        <div className="brand">
-          <img src="/favicon.svg" alt="" className="logo" />
-          <div>
-            <h1>DevCareer</h1>
-            <p className="tagline">Share jobs with friends — details fetched automatically</p>
-          </div>
-        </div>
-        {user ? (
-          <div className="identity">
-            <span className="signed-in-as">
-              Signed in as <strong>{user.name}</strong>
-            </span>
-            <RankPanel user={user} />
-            <NotificationSettings user={user} onUpdate={setUser} />
-            <button type="button" className="ghost small" onClick={handleSwitchUser}>
-              Switch
-            </button>
-          </div>
-        ) : (
-          <div className="identity">
-            <span className="signed-in-as">Not signed in</span>
-            <button type="button" className="ghost small" onClick={() => onNavigate('login')}>
-              Log in
-            </button>
-            <button type="button" className="ghost small" onClick={() => onNavigate('signup')}>
-              Sign up
-            </button>
-          </div>
-        )}
-      </header>
-
       <main>
         {activeView === 'share' && (
           <AddJobPage
@@ -603,8 +486,10 @@ export default function App({ activeView, onNavigate, search, onSearchChange, on
             onSearchChange={onSearchChange}
             user={user}
             onDelete={handleDelete}
+            onModify={handleModify}
             onReact={handleReact}
             onCommentCountChange={handleCommentCountChange}
+            onViewProfile={onViewProfile}
           />
         )}
       </main>

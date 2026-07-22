@@ -21,6 +21,8 @@ export default function AddJobPage({
       <h2>Share a job</h2>
       <form className="link-row" onSubmit={onFetch}>
         <textarea
+          id="addjob-link-input"
+          name="linkInput"
           required
           rows={2}
           placeholder="Paste a job link, or the whole posting (email, Slack message, job text)…"
@@ -47,6 +49,8 @@ export default function AddJobPage({
             <label>
               Job link {!draft.apply_email.trim() && '*'}
               <input
+                id="addjob-url"
+                name="url"
                 type="url"
                 value={draft.url}
                 maxLength={2000}
@@ -57,6 +61,8 @@ export default function AddJobPage({
             <label>
               Apply email {!draft.url.trim() && '*'}
               <input
+                id="addjob-apply-email"
+                name="applyEmail"
                 type="email"
                 value={draft.apply_email}
                 maxLength={200}
@@ -74,6 +80,8 @@ export default function AddJobPage({
                 )}
               </span>
               <input
+                id="addjob-title"
+                name="title"
                 required
                 value={draft.title}
                 maxLength={300}
@@ -91,6 +99,8 @@ export default function AddJobPage({
                 )}
               </span>
               <input
+                id="addjob-company"
+                name="company"
                 value={draft.company}
                 maxLength={200}
                 placeholder="e.g. Microsoft"
@@ -107,6 +117,8 @@ export default function AddJobPage({
                 )}
               </span>
               <input
+                id="addjob-deadline"
+                name="deadline"
                 value={draft.deadline}
                 maxLength={60}
                 placeholder="YYYY-MM-DD"
@@ -123,6 +135,8 @@ export default function AddJobPage({
                 )}
               </span>
               <input
+                id="addjob-location"
+                name="location"
                 value={draft.location}
                 maxLength={200}
                 placeholder="e.g. Bangalore, India"
@@ -133,6 +147,8 @@ export default function AddJobPage({
           <label>
             Description
             <textarea
+              id="addjob-description"
+              name="description"
               rows={5}
               value={draft.description}
               maxLength={6000}

@@ -22,7 +22,7 @@ _REFERRAL_CODE_LENGTH = 7
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    name          TEXT NOT NULL COLLATE NOCASE,
     password_hash TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -99,13 +99,53 @@ def _migrate_jobs_table(conn) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN apply_email_subject TEXT NOT NULL DEFAULT ''")
 
 
+def _drop_users_name_unique_constraint(conn) -> None:
+    """`name` (the display name) started life as the account's only
+    identifier and was UNIQUE COLLATE NOCASE from the very first schema.
+    PRD.md Task 6.7 split off `username` as the real unique login handle
+    and `name` was meant to become a free-form display name — but SQLite
+    can't drop a column constraint via ALTER TABLE, so this leftover
+    constraint kept silently rejecting two different accounts that just
+    happen to share a display name. Detected via the auto-index SQLite
+    creates for an inline UNIQUE column constraint; if found, the table is
+    rebuilt without it (one-time — a fresh or already-fixed database has no
+    such index, so this is a no-op on every later start).
+
+    Rebuilds from the table's own live CREATE TABLE text (sqlite_master),
+    not a hand-written column list — a long-lived real database can carry
+    columns from schema iterations this codebase has since moved past (e.g.
+    an old `last_digest_at`, superseded by `last_digest_job_id`), and a
+    hardcoded rebuild would silently drop that data instead of preserving
+    it as-is."""
+    for idx in conn.execute("PRAGMA index_list(users)").fetchall():
+        if not idx["unique"]:
+            continue
+        info = conn.execute(f"PRAGMA index_info({idx['name']})").fetchall()
+        if [c["name"] for c in info] == ["name"]:
+            break
+    else:
+        return
+
+    old_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+    ).fetchone()["sql"]
+    new_sql = old_sql.replace("UNIQUE COLLATE NOCASE", "COLLATE NOCASE", 1)
+    columns = [row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
+    col_list = ", ".join(columns)
+    conn.execute("ALTER TABLE users RENAME TO users_old")
+    conn.execute(new_sql)
+    conn.execute(f"INSERT INTO users ({col_list}) SELECT {col_list} FROM users_old")
+    conn.execute("DROP TABLE users_old")
+
+
 def _migrate_users_table(conn) -> None:
     """`users` may already exist from the earlier simple-invite-code scheme
     (no password), which had no `password_hash` column. Existing accounts
     from that era (empty-string hash, the column's default) simply can't
     log in under the new password-based scheme — there's no password to
     migrate from, since none was ever collected. They'd need to register
-    again under the same name, which will fail on the UNIQUE constraint;
+    again under a new username; display names no longer have to be unique
+    (see _drop_users_name_unique_constraint below) — only username does —
     in practice this only matters for the handful of test accounts created
     during development, not real users."""
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -143,12 +183,20 @@ def _migrate_users_table(conn) -> None:
         # unique login handle) split apart — previously `name` did both
         # jobs. No SQL UNIQUE constraint here for the same reason as
         # referral_code above (ALTER TABLE can't add one); enforced at the
-        # application layer in create_user instead. `name` itself keeps its
-        # original UNIQUE COLLATE NOCASE constraint from the base CREATE
-        # TABLE — removing it would need a full table rebuild, judged not
-        # worth the risk for what's now a redundant-but-harmless constraint
-        # (a display name that also happens to have to be unique).
+        # application layer in create_user instead.
         conn.execute("ALTER TABLE users ADD COLUMN username TEXT")
+    if "linkedin_url" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN linkedin_url TEXT NOT NULL DEFAULT ''")
+    if "github_url" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN github_url TEXT NOT NULL DEFAULT ''")
+    if "x_url" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN x_url TEXT NOT NULL DEFAULT ''")
+    if "bio" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT ''")
+    if "skills" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN skills TEXT NOT NULL DEFAULT ''")
+    if "target_role" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN target_role TEXT NOT NULL DEFAULT ''")
     # Backfill: any row that predates the referral_code column (or was
     # somehow inserted without one) gets a freshly generated code so every
     # existing account can start referring people immediately.
@@ -167,6 +215,7 @@ def _migrate_users_table(conn) -> None:
             "UPDATE users SET username = ? WHERE id = ?",
             (_generate_username_from_name(conn, row["name"]), row["id"]),
         )
+    _drop_users_name_unique_constraint(conn)
 
 
 def _generate_referral_code(conn) -> str:
@@ -225,6 +274,22 @@ def insert_job(job: dict) -> dict:
         return get_job(cursor.lastrowid, conn)
 
 
+def update_job(job_id: int, fields: dict) -> dict | None:
+    """PRD.md Task 6.10 — admin/superadmin editing. Doesn't touch
+    shared_by/shared_by_user_id/source/created_at — an edit corrects the
+    job's own details, not who shared it or when."""
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE jobs SET url = :url, title = :title, company = :company,
+                   description = :description, deadline = :deadline,
+                   location = :location, apply_email = :apply_email,
+                   apply_email_subject = :apply_email_subject
+               WHERE id = :id""",
+            {**fields, "id": job_id},
+        )
+        return get_job(job_id, conn)
+
+
 def get_job(job_id: int, conn=None) -> dict | None:
     query = f"SELECT {JOB_SELECT_COLUMNS} {JOB_SELECT_FROM} WHERE jobs.id = ?"
     if conn is not None:
@@ -281,11 +346,11 @@ def create_user(
     """Raises ValueError (caller turns this into a 409) if username or
     email is already taken (PRD.md Task 6.7 — checked at the application
     layer since ALTER TABLE couldn't add real UNIQUE constraints for these
-    two after the fact; see _migrate_users_table). Also still subject to
-    the original users.name UNIQUE COLLATE NOCASE constraint from the base
-    schema, which raises sqlite3.IntegrityError instead — the caller
-    catches both. A real account, not an auto-created one: the password is
-    the only way back in (see PRD.md Task 3.1).
+    two after the fact; see _migrate_users_table). `name` (the display
+    name) is deliberately NOT checked for uniqueness — only `username` is
+    the account's unique handle; two people can both be "Alex". A real
+    account, not an auto-created one: the password is the only way back in
+    (see PRD.md Task 3.1).
 
     `referred_by_code` (PRD.md Task 6.1) is looked up leniently: an unknown
     or blank code just registers the account with no referral credit rather
@@ -453,6 +518,32 @@ def update_user_notifications(user_id: int, email: str, opt_in: bool) -> dict | 
         return dict(row) if row else None
 
 
+def update_user_profile_details(
+    user_id: int,
+    linkedin_url: str,
+    github_url: str,
+    x_url: str,
+    bio: str,
+    skills: str,
+    target_role: str,
+) -> dict | None:
+    """Every field here is independently optional — leaving one blank just
+    clears it, same as update_user_notifications' email field above. Saved
+    (and re-editable) any number of times; there's no "locked after first
+    save" state."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """UPDATE users SET linkedin_url = ?, github_url = ?, x_url = ?,
+                   bio = ?, skills = ?, target_role = ?
+               WHERE id = ?""",
+            (linkedin_url, github_url, x_url, bio, skills, target_role, user_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row)
+
+
 def list_reminder_recipients() -> list[dict]:
     """Opted-in users with a real email on file — everything reminders.py
     needs to send a combined deadline + sharing-digest email (Tasks 4.1 and
@@ -518,26 +609,34 @@ def is_superadmin(user_id: int) -> bool:
     return bool(user and user["is_superadmin"])
 
 
-def ensure_admin_by_name(name: str) -> None:
-    """Idempotent — a no-op once the account is already an admin. Called at
-    register/login time (main.py) whenever the signed-in name matches the
-    ADMIN_NAMES env var, so that var takes effect immediately for both
-    brand-new accounts and ones that already existed before it was set —
-    no separate migration or startup scan needed."""
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE users SET is_admin = 1 WHERE name = ? COLLATE NOCASE AND is_admin = 0",
-            (name,),
-        )
+def ensure_master_superadmin(username: str, name: str, password_hash: str) -> None:
+    """Seeds the one hardcoded bootstrap superadmin account (main.py's
+    _MASTER_SUPERADMIN_USERNAME) on first startup — the only way a
+    superadmin can ever exist, since ordinary registration never sets
+    is_superadmin and regular admin promotion (set_user_admin below) is
+    superadmin-gated but never grants superadmin itself.
 
-
-def ensure_superadmin_by_name(name: str) -> None:
-    """Same idempotent pattern as ensure_admin_by_name, for SUPERADMIN_NAMES
-    (PRD.md Task 6.9)."""
+    Idempotent: a no-op on every later startup once the account exists,
+    and deliberately never overwrites its stored password_hash on those
+    later runs — only the is_superadmin flag is re-asserted, so the
+    account can't quietly lose superadmin without this reinstating it, but
+    also can't have its password reset out from under it by a restart."""
     with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM users WHERE username = ? COLLATE NOCASE", (username,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE users SET is_superadmin = 1 WHERE id = ? AND is_superadmin = 0",
+                (existing["id"],),
+            )
+            return
+        code = _generate_referral_code(conn)
         conn.execute(
-            "UPDATE users SET is_superadmin = 1 WHERE name = ? COLLATE NOCASE AND is_superadmin = 0",
-            (name,),
+            """INSERT INTO users (username, name, email, password_hash,
+                                  referral_code, is_superadmin)
+               VALUES (?, ?, '', ?, ?, 1)""",
+            (username, name, password_hash, code),
         )
 
 
@@ -592,3 +691,23 @@ def list_leaderboard(limit: int = 20) -> list[dict]:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def get_stats() -> dict:
+    """Landing-page headline numbers, computed live instead of hardcoded.
+    "friend circles" has no dedicated table — it's approximated as the
+    count of users who have successfully brought in at least one referral
+    (each is the center of one circle)."""
+    with get_connection() as conn:
+        jobs_shared = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        friend_circles = conn.execute(
+            "SELECT COUNT(DISTINCT referred_by_user_id) FROM users WHERE referred_by_user_id IS NOT NULL"
+        ).fetchone()[0]
+        companies_posted = conn.execute(
+            "SELECT COUNT(DISTINCT company) FROM jobs WHERE TRIM(company) != ''"
+        ).fetchone()[0]
+        return {
+            "jobs_shared": jobs_shared,
+            "friend_circles": friend_circles,
+            "companies_posted": companies_posted,
+        }

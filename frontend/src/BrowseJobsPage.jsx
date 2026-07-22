@@ -141,6 +141,8 @@ function CommentThread({ job, user, onCommentCountChange }) {
           {user ? (
             <form className="comment-form" onSubmit={handlePostComment}>
               <input
+                id={`comment-input-${job.id}`}
+                name="commentBody"
                 placeholder="Add a comment…"
                 value={text}
                 maxLength={1000}
@@ -185,14 +187,169 @@ function EmailApplyChip({ email, subject }) {
   )
 }
 
-function JobCard({ job, index, user, onDelete, onReact, onCommentCountChange }) {
+function JobEditForm({ job, onSave, onCancel }) {
+  const [draft, setDraft] = useState({
+    url: job.url || '',
+    title: job.title || '',
+    company: job.company || '',
+    description: job.description || '',
+    deadline: job.deadline || '',
+    location: job.location || '',
+    apply_email: job.apply_email || '',
+    apply_email_subject: job.apply_email_subject || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const updateField = (field) => (event) =>
+    setDraft((current) => ({ ...current, [field]: event.target.value }))
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      await onSave(draft)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form className="draft job-edit-form" onSubmit={handleSubmit}>
+      <div className="field-grid">
+        <label>
+          Job link {!draft.apply_email.trim() && '*'}
+          <input
+            id={`edit-url-${job.id}`}
+            name="url"
+            type="url"
+            value={draft.url}
+            maxLength={2000}
+            placeholder="https://… the real apply link"
+            onChange={updateField('url')}
+          />
+        </label>
+        <label>
+          Apply email {!draft.url.trim() && '*'}
+          <input
+            id={`edit-apply-email-${job.id}`}
+            name="applyEmail"
+            type="email"
+            value={draft.apply_email}
+            maxLength={200}
+            placeholder="recruiter@company.com"
+            onChange={updateField('apply_email')}
+          />
+        </label>
+        <label>
+          Job title *
+          <input
+            id={`edit-title-${job.id}`}
+            name="title"
+            required
+            value={draft.title}
+            maxLength={300}
+            placeholder="e.g. Software Engineer II"
+            onChange={updateField('title')}
+          />
+        </label>
+        <label>
+          Company
+          <input
+            id={`edit-company-${job.id}`}
+            name="company"
+            value={draft.company}
+            maxLength={200}
+            placeholder="e.g. Microsoft"
+            onChange={updateField('company')}
+          />
+        </label>
+        <label>
+          Last date to apply
+          <input
+            id={`edit-deadline-${job.id}`}
+            name="deadline"
+            value={draft.deadline}
+            maxLength={60}
+            placeholder="YYYY-MM-DD"
+            onChange={updateField('deadline')}
+          />
+        </label>
+        <label>
+          Location
+          <input
+            id={`edit-location-${job.id}`}
+            name="location"
+            value={draft.location}
+            maxLength={200}
+            placeholder="e.g. Bangalore, India"
+            onChange={updateField('location')}
+          />
+        </label>
+      </div>
+      <label>
+        Apply email subject
+        <input
+          id={`edit-apply-email-subject-${job.id}`}
+          name="applyEmailSubject"
+          value={draft.apply_email_subject}
+          maxLength={200}
+          placeholder="e.g. Application: Software Engineer II"
+          onChange={updateField('apply_email_subject')}
+        />
+      </label>
+      <label>
+        Description
+        <textarea
+          id={`edit-description-${job.id}`}
+          name="description"
+          rows={5}
+          value={draft.description}
+          maxLength={6000}
+          placeholder="What's the role about?"
+          onChange={updateField('description')}
+        />
+      </label>
+      {error && <p className="comment-error">{error}</p>}
+      <div className="draft-actions">
+        <button type="submit" className="primary" disabled={saving}>
+          {saving ? 'Saving…' : 'Save changes'}
+        </button>
+        <button type="button" className="ghost" onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function JobCard({ job, index, user, onDelete, onModify, onReact, onCommentCountChange, onViewProfile }) {
   const [expanded, setExpanded] = useState(false)
+  const [editing, setEditing] = useState(false)
   const deadline = deadlineInfo(job.deadline)
   const longDescription = job.description.length > 260
   // Staggered entrance — capped so a long feed doesn't leave late cards
   // waiting a visibly long time to appear.
   const entranceDelay = `${Math.min((index ?? 0) * 60, 480)}ms`
   const titleHref = job.url || (job.apply_email ? `mailto:${job.apply_email}` : '')
+
+  if (editing) {
+    return (
+      <article className="job-card" style={{ animationDelay: entranceDelay }}>
+        <JobEditForm
+          job={job}
+          onCancel={() => setEditing(false)}
+          onSave={async (fields) => {
+            await onModify(job.id, fields)
+            setEditing(false)
+          }}
+        />
+      </article>
+    )
+  }
 
   return (
     <article className="job-card" style={{ animationDelay: entranceDelay }}>
@@ -214,14 +371,24 @@ function JobCard({ job, index, user, onDelete, onReact, onCommentCountChange }) 
           </div>
         </div>
         {user?.is_admin && (
-          <button
-            className="icon-btn"
-            aria-label="Remove this job"
-            title="Remove this job (admin)"
-            onClick={() => onDelete(job)}
-          >
-            ✕
-          </button>
+          <div className="job-card-admin-actions">
+            <button
+              className="icon-btn"
+              aria-label="Edit this job"
+              title="Edit this job (admin)"
+              onClick={() => setEditing(true)}
+            >
+              ✎
+            </button>
+            <button
+              className="icon-btn"
+              aria-label="Remove this job"
+              title="Remove this job (admin)"
+              onClick={() => onDelete(job)}
+            >
+              ✕
+            </button>
+          </div>
         )}
       </div>
 
@@ -250,7 +417,19 @@ function JobCard({ job, index, user, onDelete, onReact, onCommentCountChange }) 
           <span className="avatar" aria-hidden="true">
             {(job.shared_by || 'A').trim().charAt(0).toUpperCase()}
           </span>
-          Shared by <strong>{job.shared_by}</strong> · {timeAgo(job.created_at)}
+          Shared by{' '}
+          {job.shared_by_user_id ? (
+            <button
+              type="button"
+              className="shared-by-name"
+              onClick={() => onViewProfile(job.shared_by_user_id)}
+            >
+              {job.shared_by}
+            </button>
+          ) : (
+            <strong>{job.shared_by}</strong>
+          )}{' '}
+          · {timeAgo(job.created_at)}
         </span>
         <span className="job-card-actions">
           {job.apply_email && (
@@ -274,8 +453,10 @@ export default function BrowseJobsPage({
   onSearchChange,
   user,
   onDelete,
+  onModify,
   onReact,
   onCommentCountChange,
+  onViewProfile,
 }) {
   return (
     <section className="feed" id="job-board">
@@ -284,6 +465,8 @@ export default function BrowseJobsPage({
           Shared jobs {jobs.length > 0 && <span className="count">{jobs.length}</span>}
         </h2>
         <input
+          id="browse-jobs-search"
+          name="search"
           className="search-input"
           placeholder="Search title, company, friend…"
           value={search}
@@ -306,8 +489,10 @@ export default function BrowseJobsPage({
             index={index}
             user={user}
             onDelete={onDelete}
+            onModify={onModify}
             onReact={onReact}
             onCommentCountChange={onCommentCountChange}
+            onViewProfile={onViewProfile}
           />
         ))}
       </div>

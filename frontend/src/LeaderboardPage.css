@@ -1,0 +1,144 @@
+/* Dedicated Leaderboard page (PRD.md Task 6.10) — same visual system as
+   AdminPage.css/ProfilePage.css (Landing's navy/orange theme, card on a
+   soft background). */
+.leaderboard-page {
+  min-height: 60vh;
+  display: flex;
+  justify-content: center;
+  padding: 48px 16px;
+}
+
+.leaderboard-card {
+  width: 100%;
+  max-width: 560px;
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: var(--shadow-md);
+  padding: 36px 40px;
+  animation: cardIn var(--duration-slow) var(--ease-spring) backwards;
+}
+
+.leaderboard-card h1 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.4rem;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.leaderboard-subtitle {
+  margin: 0 0 24px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.leaderboard-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.leaderboard-list li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.leaderboard-list li.me {
+  background: var(--accent-soft);
+}
+
+.leaderboard-rank {
+  flex-shrink: 0;
+  width: 28px;
+  text-align: center;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.leaderboard-list li.me .leaderboard-rank {
+  color: var(--accent-dark);
+}
+
+/* A <button>, not a <span> (clickable — opens that account's profile), so
+   it needs its own reset back to plain text before the rest of these
+   rules apply. */
+.leaderboard-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.leaderboard-name:hover {
+  color: var(--accent-dark);
+  text-decoration: underline;
+  transform: none;
+}
+
+.leaderboard-you {
+  margin-left: 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: var(--accent-dark);
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.leaderboard-points {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.leaderboard-cta {
+  margin: 24px 0 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.leaderboard-cta code {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+@media (max-width: 480px) {
+  .leaderboard-page {
+    padding: 28px 12px;
+  }
+
+  .leaderboard-card {
+    padding: 24px 20px;
+  }
+
+  .leaderboard-list li {
+    padding: 8px;
+    gap: 8px;
+  }
+}

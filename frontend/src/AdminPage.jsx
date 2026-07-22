@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react'
-import { listAdminUsers, setUserAdmin } from './api'
+import { listAdminUsers } from './api'
 import './AdminPage.css'
 
-// A dedicated page (PRD.md Task 6.5), not the header popover it started as
-// — every admin can promote or demote any other user (including another
-// admin) to admin; there's no separate "superadmin" tier, any admin can
-// make any other user an admin. Enforced server-side on every call here
-// (main.py's _require_admin, 403 for a non-admin) — App.jsx's caller
-// already checks user.is_admin before rendering this page at all, but that
-// client-side check is UX only, not the real gate.
+// A dedicated page (PRD.md Task 6.5) — read-only user directory for
+// regular admins. Promoting/demoting admins moved to superadmin-only
+// (PRD.md Task 6.10, see SuperAdminPage.jsx) — a regular admin's actual
+// moderation powers are job-level (add/modify/delete a job, from
+// BrowseJobsPage's JobCard), not account-level.
 export default function AdminPage({ adminUserId }) {
   const [users, setUsers] = useState(null)
   const [error, setError] = useState('')
@@ -19,23 +17,13 @@ export default function AdminPage({ adminUserId }) {
       .catch((err) => setError(err.message))
   }, [adminUserId])
 
-  async function handleToggleAdmin(target) {
-    setError('')
-    try {
-      const updated = await setUserAdmin(target.id, adminUserId, !target.is_admin)
-      setUsers((current) => current.map((u) => (u.id === target.id ? updated : u)))
-    } catch (err) {
-      setError(err.message)
-    }
-  }
-
   return (
     <div className="admin-page">
       <div className="admin-page-card">
-        <h1>Admin — manage users</h1>
+        <h1>Admin — all users</h1>
         <p className="admin-page-subtitle">
-          Promote a friend to admin so they can help moderate the board and delete jobs
-          that shouldn't be there — any admin can promote or demote any other user.
+          You can add, edit and delete jobs from the board. Promoting someone to admin
+          is a super admin action — ask one if a friend needs admin access.
         </p>
 
         {error && <p className="auth-error">{error}</p>}
@@ -51,7 +39,6 @@ export default function AdminPage({ adminUserId }) {
                   <th>Email</th>
                   <th>Rank points</th>
                   <th>Role</th>
-                  <th aria-hidden="true"></th>
                 </tr>
               </thead>
               <tbody>
@@ -61,22 +48,13 @@ export default function AdminPage({ adminUserId }) {
                     <td>{u.email || <span className="muted">—</span>}</td>
                     <td>{u.rank_points}</td>
                     <td>
-                      {u.is_admin ? (
+                      {u.is_superadmin ? (
+                        <span className="admin-badge superadmin">Super admin</span>
+                      ) : u.is_admin ? (
                         <span className="admin-badge">Admin</span>
                       ) : (
                         <span className="muted">Member</span>
                       )}
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="ghost small"
-                        disabled={u.id === adminUserId}
-                        title={u.id === adminUserId ? "You can't change your own role" : undefined}
-                        onClick={() => handleToggleAdmin(u)}
-                      >
-                        {u.is_admin ? 'Remove admin' : 'Make admin'}
-                      </button>
                     </td>
                   </tr>
                 ))}

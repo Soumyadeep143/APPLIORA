@@ -6,14 +6,24 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 os.environ["DEVCAREER_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
-os.environ.setdefault("ADMIN_NAMES", "AdminUser")
-os.environ.setdefault("SUPERADMIN_NAMES", "SuperAdminUser")
+# app.main reads these at import time to seed the one hardcoded bootstrap
+# superadmin account — set explicitly here (not relied on from a real
+# backend/.env) so the test suite doesn't depend on what happens to be in
+# the developer's local .env file.
+os.environ.setdefault("MASTER_SUPERADMIN_USERNAME", "SMASTER")
+os.environ.setdefault("MASTER_SUPERADMIN_PASSWORD", "Soumya@2050")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 
 client = TestClient(app)
+
+# It's the only way to reach superadmin at all now (see
+# test_registering_with_admin_like_name_does_not_grant_admin below for the
+# mechanism this replaced).
+MASTER_SUPERADMIN_USERNAME = os.environ["MASTER_SUPERADMIN_USERNAME"]
+MASTER_SUPERADMIN_PASSWORD = os.environ["MASTER_SUPERADMIN_PASSWORD"]
 
 
 def _username_for(name: str) -> str:
@@ -26,7 +36,7 @@ def _username_for(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "", name).lower()
 
 
-def _register(name: str, password: str = "hunter22", referral_code: str = ""):
+def _register(name: str, password: str = "Hunter1!", referral_code: str = ""):
     username = _username_for(name)
     return client.post(
         "/api/auth/register",
@@ -40,7 +50,7 @@ def _register(name: str, password: str = "hunter22", referral_code: str = ""):
     )
 
 
-def _login(name: str, password: str = "hunter22"):
+def _login(name: str, password: str = "Hunter1!"):
     return client.post(
         "/api/auth/login", json={"username": _username_for(name), "password": password}
     )
@@ -51,8 +61,19 @@ def _delete_job(job_id, admin_user_id):
 
 
 SAMPLE_USER_ID = _register("Soumyadeep").json()["id"]
-ADMIN_USER_ID = _register("AdminUser").json()["id"]
-SUPERADMIN_USER_ID = _register("SuperAdminUser").json()["id"]
+
+SUPERADMIN_USER_ID = client.post(
+    "/api/auth/login",
+    json={"username": MASTER_SUPERADMIN_USERNAME, "password": MASTER_SUPERADMIN_PASSWORD},
+).json()["id"]
+
+_admin_seed = _register("AdminUser").json()
+client.patch(
+    f"/api/admin/users/{_admin_seed['id']}/admin",
+    json={"is_admin": True},
+    params={"superadmin_user_id": SUPERADMIN_USER_ID},
+)
+ADMIN_USER_ID = _admin_seed["id"]
 
 SAMPLE_JOB = {
     "url": "https://careers.microsoft.com/us/en/job/12345",
@@ -78,7 +99,11 @@ def test_register_then_login():
     assert response.json()["name"] == "Priya"
 
 
-def test_register_rejects_duplicate_name():
+def test_register_rejects_duplicate_username_case_insensitive():
+    """`_register` derives username from name (see _username_for above), so
+    "Chandra" and "chandra" collide on the same derived username — this is
+    a username collision, not a display-name one (see
+    test_register_allows_duplicate_display_name for that case)."""
     _register("Chandra")
     response = _register("chandra")  # case-insensitive collision
     assert response.status_code == 409
@@ -86,6 +111,34 @@ def test_register_rejects_duplicate_name():
 
 def test_register_rejects_short_password():
     response = _register("Shorty", "abc")
+    assert response.status_code == 422
+
+
+def test_register_rejects_password_with_back_to_back_repeat():
+    """2212 repeats '2' back-to-back and should be rejected, even though it
+    otherwise mixes letters/digits/specials."""
+    response = _register("Repeater", "Ab2212!x")
+    assert response.status_code == 422
+
+
+def test_register_allows_password_with_spaced_out_repeat():
+    """2121 repeats '2' and '1' but never back-to-back, so it's allowed."""
+    response = _register("Spacer", "Ab2121!x")
+    assert response.status_code == 201
+
+
+def test_register_rejects_password_missing_special_character():
+    response = _register("Plain", "Abcdef12")
+    assert response.status_code == 422
+
+
+def test_register_rejects_password_missing_letter():
+    response = _register("Numeric", "12903475!")
+    assert response.status_code == 422
+
+
+def test_register_rejects_password_missing_number():
+    response = _register("Alpha", "Abcdefg!")
     assert response.status_code == 422
 
 
@@ -105,18 +158,45 @@ def test_register_rejects_blank_name():
     assert response.status_code == 422
 
 
+def test_register_allows_duplicate_display_name():
+    """PRD.md Task 6.10: only `username` is the unique handle — `name` (the
+    display name) isn't, so two different accounts can both be "Alex" as
+    long as their usernames differ. This used to 409 (a leftover UNIQUE
+    COLLATE NOCASE on `users.name` from before username/name were split)."""
+    response1 = client.post(
+        "/api/auth/register",
+        json={
+            "username": "alexfirst",
+            "name": "Alex",
+            "email": "alexfirst@example.com",
+            "password": "Hunter1!",
+        },
+    )
+    assert response1.status_code == 201
+    response2 = client.post(
+        "/api/auth/register",
+        json={
+            "username": "alexsecond",
+            "name": "Alex",
+            "email": "alexsecond@example.com",
+            "password": "Hunter1!",
+        },
+    )
+    assert response2.status_code == 201
+    assert response1.json()["id"] != response2.json()["id"]
+
+
 def test_register_rejects_duplicate_username_different_display_name():
     """PRD.md Task 6.7: username is the unique login handle, independent of
-    the (also-unique, for now — see database.create_user's docstring)
-    display name. Two accounts sharing the same derived username but with
-    different `name` values must still collide on username."""
+    the display name. Two accounts sharing the same derived username but
+    with different `name` values must still collide on username."""
     response1 = client.post(
         "/api/auth/register",
         json={
             "username": "sharedhandle",
             "name": "First Person",
             "email": "first@example.com",
-            "password": "hunter22",
+            "password": "Hunter1!",
         },
     )
     assert response1.status_code == 201
@@ -126,7 +206,7 @@ def test_register_rejects_duplicate_username_different_display_name():
             "username": "SharedHandle",  # case-insensitive collision
             "name": "Second Person",
             "email": "second@example.com",
-            "password": "hunter22",
+            "password": "Hunter1!",
         },
     )
     assert response2.status_code == 409
@@ -139,7 +219,7 @@ def test_register_rejects_duplicate_email():
             "username": "emailowner",
             "name": "Email Owner",
             "email": "shared@example.com",
-            "password": "hunter22",
+            "password": "Hunter1!",
         },
     )
     response = client.post(
@@ -148,7 +228,7 @@ def test_register_rejects_duplicate_email():
             "username": "emailtaker",
             "name": "Email Taker",
             "email": "shared@example.com",
-            "password": "hunter22",
+            "password": "Hunter1!",
         },
     )
     assert response.status_code == 409
@@ -163,15 +243,15 @@ def test_login_uses_username_not_display_name():
             "username": "distincthandle",
             "name": "A Totally Different Display Name",
             "email": "distinct@example.com",
-            "password": "hunter22",
+            "password": "Hunter1!",
         },
     )
     assert client.post(
         "/api/auth/login",
-        json={"username": "A Totally Different Display Name", "password": "hunter22"},
+        json={"username": "A Totally Different Display Name", "password": "Hunter1!"},
     ).status_code == 401
     assert client.post(
-        "/api/auth/login", json={"username": "distincthandle", "password": "hunter22"}
+        "/api/auth/login", json={"username": "distincthandle", "password": "Hunter1!"}
     ).status_code == 200
 
 
@@ -200,6 +280,26 @@ def test_search_jobs():
     assert results and all("Netflix" in job["company"] for job in results)
 
 
+def test_stats_reflects_a_newly_shared_job_and_new_company():
+    """Landing page headline numbers (jobs shared / distinct companies) —
+    compared as deltas since other tests share this same database."""
+    before = client.get("/api/stats").json()
+    client.post(
+        "/api/jobs", json={**SAMPLE_JOB, "company": "StatsCo" + os.urandom(3).hex()}
+    )
+    after = client.get("/api/stats").json()
+    assert after["jobs_shared"] == before["jobs_shared"] + 1
+    assert after["companies_posted"] == before["companies_posted"] + 1
+
+
+def test_stats_friend_circles_counts_users_with_a_referral():
+    before = client.get("/api/stats").json()
+    referrer = _register("StatsReferrer" + os.urandom(3).hex()).json()
+    _register("StatsReferred" + os.urandom(3).hex(), referral_code=referrer["referral_code"])
+    after = client.get("/api/stats").json()
+    assert after["friend_circles"] == before["friend_circles"] + 1
+
+
 def test_get_and_delete_job():
     created = client.post("/api/jobs", json=SAMPLE_JOB).json()
     job_id = created["id"]
@@ -215,6 +315,45 @@ def test_delete_job_requires_admin():
     response = _delete_job(created["id"], SAMPLE_USER_ID)  # not an admin
     assert response.status_code == 403
     assert client.get(f"/api/jobs/{created['id']}").status_code == 200  # still there
+
+
+def _modify_job(job_id, admin_user_id, **overrides):
+    body = {**SAMPLE_JOB, **overrides}
+    body.pop("user_id", None)
+    return client.patch(f"/api/jobs/{job_id}", json=body, params={"admin_user_id": admin_user_id})
+
+
+def test_admin_can_modify_a_job():
+    created = client.post("/api/jobs", json=SAMPLE_JOB).json()
+    response = _modify_job(created["id"], ADMIN_USER_ID, title="Corrected Title")
+    assert response.status_code == 200
+    assert response.json()["title"] == "Corrected Title"
+    assert client.get(f"/api/jobs/{created['id']}").json()["title"] == "Corrected Title"
+
+
+def test_superadmin_can_modify_a_job():
+    created = client.post("/api/jobs", json=SAMPLE_JOB).json()
+    response = _modify_job(created["id"], SUPERADMIN_USER_ID, title="Also Corrected")
+    assert response.status_code == 200
+    assert response.json()["title"] == "Also Corrected"
+
+
+def test_regular_member_cannot_modify_a_job():
+    created = client.post("/api/jobs", json=SAMPLE_JOB).json()
+    response = _modify_job(created["id"], SAMPLE_USER_ID, title="Sneaky Edit")
+    assert response.status_code == 403
+    assert client.get(f"/api/jobs/{created['id']}").json()["title"] == SAMPLE_JOB["title"]
+
+
+def test_modify_unknown_job_404():
+    response = _modify_job(999999, ADMIN_USER_ID, title="Ghost")
+    assert response.status_code == 404
+
+
+def test_modify_job_rejects_missing_link_and_email():
+    created = client.post("/api/jobs", json=SAMPLE_JOB).json()
+    response = _modify_job(created["id"], ADMIN_USER_ID, url="", apply_email="")
+    assert response.status_code == 422
 
 
 def test_create_job_rejects_bad_url():
@@ -467,6 +606,119 @@ def test_update_notifications_unknown_user_404():
     assert response.status_code == 404
 
 
+def test_update_profile_sets_social_links():
+    user_id = _register("SocialSetter" + os.urandom(3).hex()).json()["id"]
+    response = client.patch(
+        f"/api/users/{user_id}/profile",
+        json={
+            "linkedin_url": "https://www.linkedin.com/in/someone",
+            "github_url": "https://github.com/someone",
+            "x_url": "https://x.com/someone",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["linkedin_url"] == "https://www.linkedin.com/in/someone"
+    assert body["github_url"] == "https://github.com/someone"
+    assert body["x_url"] == "https://x.com/someone"
+
+
+def test_update_profile_allows_blank_to_clear():
+    user_id = _register("SocialClearer" + os.urandom(3).hex()).json()["id"]
+    client.patch(
+        f"/api/users/{user_id}/profile",
+        json={"linkedin_url": "https://www.linkedin.com/in/someone", "github_url": "", "x_url": ""},
+    )
+    response = client.patch(
+        f"/api/users/{user_id}/profile",
+        json={"linkedin_url": "", "github_url": "", "x_url": ""},
+    )
+    assert response.status_code == 200
+    assert response.json()["linkedin_url"] == ""
+
+
+def test_update_profile_rejects_invalid_url():
+    user_id = _register("SocialBad" + os.urandom(3).hex()).json()["id"]
+    response = client.patch(
+        f"/api/users/{user_id}/profile",
+        json={"linkedin_url": "not-a-url", "github_url": "", "x_url": ""},
+    )
+    assert response.status_code == 422
+
+
+def test_update_profile_unknown_user_404():
+    response = client.patch(
+        "/api/users/999999/profile",
+        json={"linkedin_url": "", "github_url": "", "x_url": ""},
+    )
+    assert response.status_code == 404
+
+
+def test_update_profile_sets_only_one_field_leaves_rest_blank():
+    """Every field is independently optional — sending only linkedin_url
+    (omitting bio/skills/target_role/github_url/x_url entirely) must save
+    that one field and leave the rest at their blank default, not error."""
+    user_id = _register("PartialProfile" + os.urandom(3).hex()).json()["id"]
+    response = client.patch(
+        f"/api/users/{user_id}/profile",
+        json={"linkedin_url": "https://www.linkedin.com/in/partial"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["linkedin_url"] == "https://www.linkedin.com/in/partial"
+    assert body["github_url"] == ""
+    assert body["bio"] == ""
+
+
+def test_update_profile_sets_bio_skills_and_target_role():
+    user_id = _register("BioSetter" + os.urandom(3).hex()).json()["id"]
+    response = client.patch(
+        f"/api/users/{user_id}/profile",
+        json={"bio": "Backend engineer who loves Python.", "skills": "Python, FastAPI, SQL", "target_role": "Backend Engineer"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bio"] == "Backend engineer who loves Python."
+    assert body["skills"] == "Python, FastAPI, SQL"
+    assert body["target_role"] == "Backend Engineer"
+
+    # Modifiable after the first save, not locked in.
+    updated = client.patch(
+        f"/api/users/{user_id}/profile",
+        json={"bio": "Updated bio.", "skills": "Python, FastAPI, SQL, Docker", "target_role": "Senior Backend Engineer"},
+    ).json()
+    assert updated["bio"] == "Updated bio."
+    assert updated["target_role"] == "Senior Backend Engineer"
+
+
+def test_get_user_profile_returns_public_fields():
+    user_id = _register("ProfileViewed" + os.urandom(3).hex()).json()["id"]
+    client.patch(
+        f"/api/users/{user_id}/profile",
+        json={
+            "linkedin_url": "https://www.linkedin.com/in/someone",
+            "bio": "Hi there.",
+            "skills": "Go, Kubernetes",
+            "target_role": "SRE",
+        },
+    )
+    response = client.get(f"/api/users/{user_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == user_id
+    assert body["linkedin_url"] == "https://www.linkedin.com/in/someone"
+    assert body["bio"] == "Hi there."
+    assert body["skills"] == "Go, Kubernetes"
+    assert body["target_role"] == "SRE"
+    assert "email" not in body
+    assert "reminders_opt_in" not in body
+
+
+def test_get_user_profile_unknown_user_404():
+    response = client.get("/api/users/999999")
+    assert response.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # Referrals, rank points, admin (PRD.md Task 6.1/6.2)
 # ---------------------------------------------------------------------------
@@ -519,12 +771,12 @@ def test_non_admin_cannot_list_users():
     assert response.status_code == 403
 
 
-def test_admin_can_promote_another_user():
+def test_superadmin_can_promote_another_user():
     target = _register("PromoteMe" + os.urandom(3).hex()).json()
     response = client.patch(
         f"/api/admin/users/{target['id']}/admin",
         json={"is_admin": True},
-        params={"admin_user_id": ADMIN_USER_ID},
+        params={"superadmin_user_id": SUPERADMIN_USER_ID},
     )
     assert response.status_code == 200
     assert response.json()["is_admin"] is True
@@ -532,12 +784,24 @@ def test_admin_can_promote_another_user():
     assert _login(target["name"]).json()["is_admin"] is True
 
 
-def test_non_admin_cannot_promote():
+def test_regular_admin_cannot_promote():
+    """PRD.md Task 6.10: promoting is superadmin-only now — a *regular*
+    admin (not just an ordinary member) is also turned away."""
     target = _register("StaysRegular" + os.urandom(3).hex()).json()
     response = client.patch(
         f"/api/admin/users/{target['id']}/admin",
         json={"is_admin": True},
-        params={"admin_user_id": SAMPLE_USER_ID},
+        params={"superadmin_user_id": ADMIN_USER_ID},
+    )
+    assert response.status_code == 403
+
+
+def test_non_admin_cannot_promote():
+    target = _register("StaysRegular2" + os.urandom(3).hex()).json()
+    response = client.patch(
+        f"/api/admin/users/{target['id']}/admin",
+        json={"is_admin": True},
+        params={"superadmin_user_id": SAMPLE_USER_ID},
     )
     assert response.status_code == 403
 
@@ -546,18 +810,55 @@ def test_promote_unknown_user_404():
     response = client.patch(
         "/api/admin/users/999999/admin",
         json={"is_admin": True},
-        params={"admin_user_id": ADMIN_USER_ID},
+        params={"superadmin_user_id": SUPERADMIN_USER_ID},
     )
     assert response.status_code == 404
 
 
-def test_admin_names_env_promotes_existing_account_at_login(monkeypatch):
-    plain_name = "FutureAdmin" + os.urandom(3).hex()
-    _register(plain_name)
-    assert _login(plain_name).json()["is_admin"] is False
+def test_registering_with_admin_like_name_does_not_grant_admin():
+    """The old ADMIN_NAMES/SUPERADMIN_NAMES env-var mechanism matched a
+    registering/logging-in account's *display name* against a list — but
+    `name` was never unique (test_register_allows_duplicate_display_name),
+    so anyone could register an account named "AdminUser" or
+    "SuperAdminUser" and get auto-promoted. That mechanism is gone: admin
+    is only ever granted by an existing superadmin (the promote endpoint
+    below), and superadmin only ever exists as the one hardcoded master
+    account."""
+    body = _register("AdminUser" + os.urandom(3).hex()).json()
+    assert body["is_admin"] is False
+    assert body["is_superadmin"] is False
 
-    monkeypatch.setenv("ADMIN_NAMES", f"AdminUser,{plain_name}")
-    assert _login(plain_name).json()["is_admin"] is True
+    body2 = _register("SuperAdminUser" + os.urandom(3).hex()).json()
+    assert body2["is_admin"] is False
+    assert body2["is_superadmin"] is False
+
+
+def test_master_superadmin_can_log_in():
+    response = client.post(
+        "/api/auth/login",
+        json={"username": MASTER_SUPERADMIN_USERNAME, "password": MASTER_SUPERADMIN_PASSWORD},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_superadmin"] is True
+    assert body["is_admin"] is True
+
+
+def test_master_superadmin_username_is_reserved():
+    """The master account is seeded at startup, so a fresh registration
+    attempt under the same username collides like any other taken
+    username — there's no separate carve-out that would let someone
+    register their own "SMASTER" account."""
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "username": MASTER_SUPERADMIN_USERNAME,
+            "name": "Impersonator",
+            "email": "impersonator@example.com",
+            "password": "Ab2121!x",
+        },
+    )
+    assert response.status_code == 409
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +867,10 @@ def test_admin_names_env_promotes_existing_account_at_login(monkeypatch):
 
 
 def test_login_response_reports_superadmin_as_admin_too():
-    body = _login("SuperAdminUser").json()
+    body = client.post(
+        "/api/auth/login",
+        json={"username": MASTER_SUPERADMIN_USERNAME, "password": MASTER_SUPERADMIN_PASSWORD},
+    ).json()
     assert body["is_superadmin"] is True
     assert body["is_admin"] is True  # superadmin implies admin, not a separate flag to also set
 

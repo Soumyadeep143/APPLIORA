@@ -63,3 +63,13 @@
 .admin-table tr:last-child td {
   border-bottom: none;
 }
+
+@media (max-width: 480px) {
+  .admin-page {
+    padding: 28px 12px;
+  }
+
+  .admin-page-card {
+    padding: 24px 20px;
+  }
+}

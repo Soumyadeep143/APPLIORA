@@ -1,8 +1,6 @@
-/* Landing.jsx and App.jsx now render on one continuous page (PRD.md Task
-   6.3) linked by same-page anchors (#app, #share-a-job, #job-board) instead
-   of a view switch — smooth-scroll globally, and offset each jump target so
-   it doesn't land underneath the two stacked sticky headers (Landing's
-   .landing-header, then App's own .topbar further down). */
+/* Anchor ids kept for deep-linking within a page-per-view (PRD.md Task
+   6.4) — smooth-scroll globally, and offset each jump target so it doesn't
+   land underneath Landing's sticky .landing-header. */
 html {
   scroll-behavior: smooth;
 }
@@ -158,71 +156,6 @@ body::after {
 }
 
 /* ---------- header ---------- */
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 24px;
-  position: sticky;
-  top: 12px;
-  z-index: 30;
-  padding: 14px 20px;
-  background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur)) saturate(160%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--glass-shadow);
-  animation: fadeSlideDown var(--duration-slow) var(--ease-spring) backwards;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.logo {
-  width: 44px;
-  height: 44px;
-}
-
-.brand h1 {
-  margin: 0;
-  font-size: 1.5rem;
-  letter-spacing: -0.02em;
-}
-
-.tagline {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.login-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.login-row .link-btn {
-  white-space: nowrap;
-}
-
-.login-row input {
-  width: 140px;
-}
-
-.identity {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  position: relative;
-}
-
 .notif-panel {
   position: absolute;
   top: calc(100% + var(--space-2));
@@ -264,62 +197,6 @@ body::after {
   flex-shrink: 0;
 }
 
-.rank-points {
-  margin: 0;
-  font-size: var(--text-lg);
-  color: var(--ink);
-}
-
-.referral-code-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.referral-code-row code {
-  font-size: var(--text-base);
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: var(--accent-dark);
-  background: var(--accent-soft);
-  padding: 3px 8px;
-  border-radius: 6px;
-}
-
-.rank-leaderboard-title {
-  margin: 0;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--muted);
-}
-
-.rank-leaderboard,
-.admin-user-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.rank-leaderboard li,
-.admin-user-list li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  padding: 4px 0;
-}
-
-.rank-leaderboard li.me {
-  font-weight: 700;
-  color: var(--accent-dark);
-}
-
 .admin-badge {
   margin-left: 6px;
   font-size: 0.7rem;
@@ -330,11 +207,6 @@ body::after {
   background: var(--accent-soft);
   padding: 2px 6px;
   border-radius: 999px;
-}
-
-.signed-in-as {
-  font-size: 0.85rem;
-  color: var(--muted);
 }
 
 button.ghost.small {
@@ -655,6 +527,23 @@ button.ghost:hover:not(:disabled) {
   gap: 10px;
 }
 
+.job-card-admin-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* PRD.md Task 6.10 — admin/superadmin job-edit form, reuses AddJobPage's
+   .draft/.field-grid look but sits at the top of the card (no preceding
+   form to visually separate from), so the dashed top border/margin that
+   .draft normally adds is zeroed out here. */
+.job-edit-form {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
 .job-title {
   margin: 0 0 4px;
   font-size: 1.05rem;
@@ -893,6 +782,25 @@ button.ghost:hover:not(:disabled) {
   color: var(--ink);
 }
 
+/* A <button>, not a <strong> — clickable when the job carries a real
+   shared_by_user_id (PRD.md Task 6.13), opening that account's profile. */
+.shared-by-name {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.shared-by-name:hover {
+  color: var(--accent-dark);
+  text-decoration: underline;
+  transform: none;
+}
+
 .avatar {
   display: inline-flex;
   align-items: center;
@@ -953,19 +861,8 @@ button.ghost:hover:not(:disabled) {
 }
 
 @media (max-width: 560px) {
-  .login-row,
   .search-input {
     width: 100%;
-  }
-
-  .login-row input {
-    width: 0;
-    flex: 1;
-  }
-
-  .topbar {
-    position: static;
-    padding: 12px 14px;
   }
 
   body::before,
@@ -985,7 +882,6 @@ button.ghost:hover:not(:disabled) {
   body,
   body::before,
   body::after,
-  .topbar,
   .share-box,
   .job-card,
   .empty,

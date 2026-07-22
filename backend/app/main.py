@@ -2,7 +2,6 @@
 
 import os
 import re
-import sqlite3
 from urllib.parse import urlparse
 
 import bcrypt
@@ -31,6 +30,29 @@ app.add_middleware(
 )
 
 database.init_db()
+
+# The only way a superadmin can ever exist: this one username + password,
+# read from the environment (backend/.env — gitignored, same as
+# GROQ_API_KEY/TAVILY_API_KEY/RESEND_API_KEY above) and seeded once at
+# startup. Never hardcoded here — a credential baked into source would end
+# up in git history regardless of .env being gitignored. Replaces the old
+# ADMIN_NAMES/SUPERADMIN_NAMES env-var mechanism, which matched a
+# registering or logging-in account's *display name* — not unique, so
+# anyone could register a new account with a matching name and get
+# auto-promoted. Regular admin is still reachable, but only by an existing
+# superadmin via PATCH /api/admin/users/{id}/admin below — never
+# automatically. If either var is unset, no bootstrap account is seeded
+# (empty over confidently wrong — see extractor.py for the same principle
+# elsewhere in this codebase) rather than falling back to a known default.
+_MASTER_SUPERADMIN_USERNAME = os.environ.get("MASTER_SUPERADMIN_USERNAME", "")
+_MASTER_SUPERADMIN_PASSWORD = os.environ.get("MASTER_SUPERADMIN_PASSWORD", "")
+
+if _MASTER_SUPERADMIN_USERNAME and _MASTER_SUPERADMIN_PASSWORD:
+    database.ensure_master_superadmin(
+        _MASTER_SUPERADMIN_USERNAME,
+        "Super Admin",
+        bcrypt.hashpw(_MASTER_SUPERADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode(),
+    )
 
 
 class ExtractRequest(BaseModel):
@@ -63,10 +85,11 @@ class ExtractRequest(BaseModel):
         return self
 
 
-class JobCreate(BaseModel):
-    """`shared_by` is a real users.id (Task 3.1) rather than a free-text
-    name — the frontend gets that id from POST /api/auth/register or
-    POST /api/auth/login.
+class _JobFields(BaseModel):
+    """Shared by JobCreate and JobUpdate (PRD.md Task 6.10) — same fields,
+    same validation, so a job edited by an admin is held to the same bar
+    as one shared normally rather than a separately-maintained copy that
+    could quietly drift.
 
     url and apply_email (Task 2.4) are each independently optional — a
     pasted post might give a real apply link, an apply-by-email address, or
@@ -80,8 +103,6 @@ class JobCreate(BaseModel):
     description: str = Field(default="", max_length=6000)
     deadline: str = Field(default="", max_length=60)
     location: str = Field(default="", max_length=200)
-    source: str = Field(default="", max_length=200)
-    user_id: int = Field(...)
     apply_email: str = Field(default="", max_length=200)
     apply_email_subject: str = Field(default="", max_length=200)
 
@@ -105,10 +126,25 @@ class JobCreate(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def require_link_or_email(self) -> "JobCreate":
+    def require_link_or_email(self) -> "_JobFields":
         if not self.url and not self.apply_email:
             raise ValueError("Provide a job link, an apply email, or both.")
         return self
+
+
+class JobCreate(_JobFields):
+    """`shared_by` is a real users.id (Task 3.1) rather than a free-text
+    name — the frontend gets that id from POST /api/auth/register or
+    POST /api/auth/login."""
+
+    source: str = Field(default="", max_length=200)
+    user_id: int = Field(...)
+
+
+class JobUpdate(_JobFields):
+    """PRD.md Task 6.10 — admin/superadmin-only job editing. Same field set
+    as JobCreate minus the sharer-identity fields (source is left alone by
+    an edit; user_id isn't something an edit should be able to reassign)."""
 
 
 # Fixed vocabulary, not a free-form emoji picker — mirrors the deadline
@@ -177,6 +213,44 @@ class NotificationSettings(BaseModel):
         return self
 
 
+class ProfileDetails(BaseModel):
+    """PATCH /api/users/{id}/profile — the editable part of ProfilePage.jsx
+    beyond the account fields set at registration: LinkedIn/GitHub/X links,
+    a free-form bio, a skills list (plain comma-separated text, not a
+    structured tag list — this app has no need for per-skill querying),
+    and the role the user is targeting. Every field is independently
+    optional (leaving one blank just clears it) and re-editable any number
+    of times after the first save — there's no "locked in" state.
+
+    URL fields are validated the same lightweight way as `url` elsewhere in
+    this file (urlparse scheme+netloc, not a full domain allowlist —
+    consistent with this codebase's existing "don't over-validate" style);
+    bio/skills/target_role are free text with just a length cap."""
+
+    linkedin_url: str = Field(default="", max_length=300)
+    github_url: str = Field(default="", max_length=300)
+    x_url: str = Field(default="", max_length=300)
+    bio: str = Field(default="", max_length=500)
+    skills: str = Field(default="", max_length=300)
+    target_role: str = Field(default="", max_length=100)
+
+    @field_validator("linkedin_url", "github_url", "x_url")
+    @classmethod
+    def valid_url_or_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return value
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("Please provide a valid http(s) link, or leave it blank.")
+        return value
+
+    @field_validator("bio", "skills", "target_role")
+    @classmethod
+    def trim(cls, value: str) -> str:
+        return value.strip()
+
+
 class RegisterRequest(BaseModel):
     """A real account (PRD.md Task 3.1, extended in Task 6.7): username,
     display name, email and password. `username` is the unique login
@@ -223,6 +297,28 @@ class RegisterRequest(BaseModel):
             raise ValueError("Please enter a valid email address.")
         return value
 
+    @field_validator("password")
+    @classmethod
+    def valid_password(cls, value: str) -> str:
+        """Two rules: no character may immediately repeat itself (2212 is
+        rejected, but 2121 is fine — the repeat isn't back-to-back), and the
+        password must mix all three of letters, digits and a special
+        (non-alphanumeric) character. Checked here rather than in
+        database.create_user since this is a format rule on the raw
+        password, not a uniqueness check against stored data."""
+        if re.search(r"(.)\1", value):
+            raise ValueError(
+                "Password can't repeat the same character twice in a row "
+                "(e.g. 2212) — spaced-out repeats like 2121 are fine."
+            )
+        if not re.search(r"[A-Za-z]", value):
+            raise ValueError("Password must include at least one letter.")
+        if not re.search(r"\d", value):
+            raise ValueError("Password must include at least one number.")
+        if not re.search(r"[^A-Za-z0-9]", value):
+            raise ValueError("Password must include at least one special character.")
+        return value
+
 
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=32)
@@ -247,28 +343,25 @@ def _public_user(user: dict) -> dict:
         "is_superadmin": bool(user.get("is_superadmin", 0)),
         "referral_code": user.get("referral_code", ""),
         "rank_points": user.get("rank_points", 0),
+        "linkedin_url": user.get("linkedin_url", ""),
+        "github_url": user.get("github_url", ""),
+        "x_url": user.get("x_url", ""),
+        "bio": user.get("bio", ""),
+        "skills": user.get("skills", ""),
+        "target_role": user.get("target_role", ""),
     }
 
 
-def _names_from_env(var_name: str) -> set[str]:
-    """PRD.md Task 6.2/6.9: comma-separated env vars (ADMIN_NAMES,
-    SUPERADMIN_NAMES), not a DB seed script — re-read per call (cheap, and
-    avoids caching a stale value at import time the way DB_PATH
-    intentionally isn't for this)."""
-    raw = os.environ.get(var_name, "")
-    return {name.strip().lower() for name in raw.split(",") if name.strip()}
-
-
-def _maybe_promote_admin(name: str) -> None:
-    """Called at register/login so ADMIN_NAMES/SUPERADMIN_NAMES take effect
-    immediately — for a brand-new account matching either list, or one
-    that already existed before the env var was set. Idempotent
-    (database.ensure_*_by_name no-ops once already set)."""
-    lowered = name.strip().lower()
-    if lowered in _names_from_env("ADMIN_NAMES"):
-        database.ensure_admin_by_name(name)
-    if lowered in _names_from_env("SUPERADMIN_NAMES"):
-        database.ensure_superadmin_by_name(name)
+def _public_profile(user: dict) -> dict:
+    """A *third party's* view of an account (GET /api/users/{id}, opened
+    from a Leaderboard row or a job's "Shared by" name) — same idea as
+    _public_user but additionally drops email/reminders_opt_in, which are
+    account settings, not something to expose to whoever's looking someone
+    else up."""
+    public = _public_user(user)
+    public.pop("email", None)
+    public.pop("reminders_opt_in", None)
+    return public
 
 
 def _require_admin(admin_user_id: int) -> None:
@@ -288,11 +381,8 @@ def register(request: RegisterRequest) -> dict:
         user = database.create_user(
             request.username, request.name, request.email, password_hash, request.referral_code
         )
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="That name is already taken.")
     except ValueError as err:
         raise HTTPException(status_code=409, detail=str(err))
-    _maybe_promote_admin(user["name"])
     return _public_user(database.get_user(user["id"]))
 
 
@@ -309,7 +399,6 @@ def login(request: LoginRequest) -> dict:
         raise invalid
     if not bcrypt.checkpw(request.password.encode(), user["password_hash"].encode()):
         raise invalid
-    _maybe_promote_admin(user["name"])
     return _public_user(database.get_user(user["id"]))
 
 
@@ -328,6 +417,11 @@ def extract(request: ExtractRequest) -> dict:
 @app.get("/api/jobs")
 def get_jobs(search: str = Query(default="", max_length=200)) -> list[dict]:
     return database.list_jobs(search.strip())
+
+
+@app.get("/api/stats")
+def get_stats() -> dict:
+    return database.get_stats()
 
 
 @app.post("/api/jobs", status_code=201)
@@ -350,6 +444,17 @@ def get_single_job(job_id: int) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@app.patch("/api/jobs/{job_id}")
+def modify_job(job_id: int, job: JobUpdate, admin_user_id: int = Query(...)) -> dict:
+    """PRD.md Task 6.10 — admin/superadmin can correct a job's details
+    after the fact (a bad extraction, a stale deadline); the original
+    sharer and ordinary members cannot, same tier as job deletion."""
+    _require_admin(admin_user_id)
+    if database.get_job(job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return database.update_job(job_id, job.model_dump())
 
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
@@ -400,11 +505,39 @@ def remove_comment(job_id: int, comment_id: int, user_id: int = Query(...)) -> N
         raise HTTPException(status_code=403, detail="You can only delete your own comments.")
 
 
+@app.get("/api/users/{user_id}")
+def get_user_profile(user_id: int) -> dict:
+    """Opened from a Leaderboard row or a job's "Shared by" name (PRD.md
+    Task 6.13) — a read-only look at someone else's public profile.
+    _public_profile (not _public_user) since this is a third party
+    looking someone up, not the account's own settings view."""
+    user = database.get_user(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _public_profile(user)
+
+
 @app.patch("/api/users/{user_id}/notifications")
 def update_notifications(user_id: int, request: NotificationSettings) -> dict:
     if database.get_user(user_id) is None:
         raise HTTPException(status_code=404, detail="User not found")
     user = database.update_user_notifications(user_id, request.email, request.opt_in)
+    return _public_user(user)
+
+
+@app.patch("/api/users/{user_id}/profile")
+def update_profile(user_id: int, request: ProfileDetails) -> dict:
+    user = database.update_user_profile_details(
+        user_id,
+        request.linkedin_url,
+        request.github_url,
+        request.x_url,
+        request.bio,
+        request.skills,
+        request.target_role,
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
     return _public_user(user)
 
 
@@ -427,8 +560,13 @@ def admin_list_users(admin_user_id: int = Query(...)) -> list[dict]:
 
 
 @app.patch("/api/admin/users/{user_id}/admin")
-def admin_set_role(user_id: int, request: AdminRoleUpdate, admin_user_id: int = Query(...)) -> dict:
-    _require_admin(admin_user_id)
+def admin_set_role(user_id: int, request: AdminRoleUpdate, superadmin_user_id: int = Query(...)) -> dict:
+    """PRD.md Task 6.10 — promoting/demoting admins is superadmin-only now
+    (was any admin, per Task 6.2). A regular admin can still moderate jobs
+    (delete, and now modify — see PATCH /api/jobs/{job_id} below) and can
+    still *view* the user list (GET /api/admin/users, unchanged), just not
+    change anyone's admin status."""
+    _require_superadmin(superadmin_user_id)
     user = database.set_user_admin(user_id, request.is_admin)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")

@@ -41,11 +41,19 @@ export const login = (username, password) =>
 export const listJobs = (search = '') =>
   request(`/api/jobs${search ? `?search=${encodeURIComponent(search)}` : ''}`)
 
+export const getStats = () => request('/api/stats')
+
 export const createJob = (job) =>
   request('/api/jobs', { method: 'POST', body: JSON.stringify(job) })
 
 export const deleteJob = (id, adminUserId) =>
   request(`/api/jobs/${id}?admin_user_id=${adminUserId}`, { method: 'DELETE' })
+
+export const updateJob = (id, job, adminUserId) =>
+  request(`/api/jobs/${id}?admin_user_id=${adminUserId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(job),
+  })
 
 export const toggleReaction = (jobId, userId, emoji) =>
   request(`/api/jobs/${jobId}/reactions`, {
@@ -70,13 +78,31 @@ export const updateNotificationSettings = (userId, email, optIn) =>
     body: JSON.stringify({ email, opt_in: optIn }),
   })
 
+export const updateProfileDetails = (
+  userId,
+  { linkedinUrl, githubUrl, xUrl, bio, skills, targetRole }
+) =>
+  request(`/api/users/${userId}/profile`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      linkedin_url: linkedinUrl,
+      github_url: githubUrl,
+      x_url: xUrl,
+      bio,
+      skills,
+      target_role: targetRole,
+    }),
+  })
+
+export const getUserProfile = (userId) => request(`/api/users/${userId}`)
+
 export const getLeaderboard = () => request('/api/leaderboard')
 
 export const listAdminUsers = (adminUserId) =>
   request(`/api/admin/users?admin_user_id=${adminUserId}`)
 
-export const setUserAdmin = (userId, adminUserId, isAdmin) =>
-  request(`/api/admin/users/${userId}/admin?admin_user_id=${adminUserId}`, {
+export const setUserAdmin = (userId, superadminUserId, isAdmin) =>
+  request(`/api/admin/users/${userId}/admin?superadmin_user_id=${superadminUserId}`, {
     method: 'PATCH',
     body: JSON.stringify({ is_admin: isAdmin }),
   })

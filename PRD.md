@@ -1313,6 +1313,215 @@ be built.
 
 ---
 
+### Task 6.10 — Narrower admin powers, job editing, dedicated leaderboard, navbar cleanup
+Status: DONE — 2026-07-17
+Why: user-directed. Splits Task 6.2's admin role further: promoting/
+demoting admins should be superadmin-only (a regular admin keeps job
+moderation but not account-level trust decisions); both admin tiers gained
+the ability to *edit* a job, not just delete it; the Rank popover became
+its own Leaderboard page; and the identity bar living inside App.jsx's own
+page header (redundant with Landing's persistent navbar, and explicitly
+asked to stop showing on Browse Jobs/Add Job) was removed in favor of
+putting Signed-in-as/Reminders/Switch directly in Landing's navbar, next to
+a new Leaderboard link.
+
+Processes:
+- [x] `PATCH /api/admin/users/{id}/admin` (promote/demote) now requires
+      `superadmin_user_id`, not `admin_user_id` — `_require_superadmin`
+      instead of `_require_admin`. `GET /api/admin/users` (viewing the
+      list) stays open to both tiers.
+- [x] `PATCH /api/jobs/{id}` (new): admin or superadmin only
+      (`_require_admin`), reuses `_JobFields` — the same validation
+      `JobCreate` already enforces — via a `JobUpdate` subclass so an
+      edited job is held to the same bar as one shared normally.
+      `database.update_job()` only touches the job's own fields, not
+      `shared_by`/`shared_by_user_id`/`source`/`created_at` — an edit
+      corrects a job's details, not who shared it or when.
+- [x] `frontend/src/AdminPage.jsx`: the promote/demote button removed
+      (would 403 for a regular admin now) — it's a read-only directory
+      (name/email/rank points/role) with reworded copy. Promotion UI stays
+      only on `SuperAdminPage.jsx`, unchanged.
+- [x] `frontend/src/LeaderboardPage.jsx` + `.css` (new): public, ungated —
+      same reasoning as Trending, ranking carries no private data. Replaces
+      the old Rank popover (`RankPanel`, deleted from `App.jsx`); the
+      referral-code display it used to hold moved to `ProfilePage.jsx`
+      already (Task 6.8), so nothing was lost.
+- [x] `user` state lifted from `App.jsx` into `main.jsx`'s `Root` (with the
+      localStorage read/write it used to own) and passed to both `Landing`
+      and `App` as `user`/`setUser` props — previously `App` owned it and
+      mirrored a read-only copy up to `Root` for `Landing`'s nav; now
+      there's one owner, since both siblings need to read *and* write it
+      (Landing's new Switch button, App's login/signup/react/etc). Removed
+      the now-unneeded `onUserChange` mirror effect.
+- [x] `App.jsx`'s own `<header className="topbar">` (logo/tagline/identity
+      bar) deleted outright — it only ever rendered on Browse Jobs/Add Job
+      anyway, which is exactly where it was asked to stop appearing.
+      `NotificationSettings` (the Reminders popover) and its
+      `useOutsideClose` helper moved into `Landing.jsx`, rendered in the
+      navbar's identity block alongside a new Switch button
+      (`setUser(null)` + navigate to Login). Dead CSS the old header used
+      (`.topbar`, `.brand`, `.logo`, `.tagline`, `.login-row`, `.identity`,
+      `.signed-in-as`, plus the old Rank-popover-only rules `.rank-points`,
+      `.referral-code-row`, `.rank-leaderboard*`, `.admin-user-list`, none
+      of which anything still used) removed from `index.css`.
+- [x] Landing's "Get started free" CTA: `onNavigate(user ? 'board' :
+      'signup')` — was unconditionally `'signup'`, which sent an
+      already-signed-in visitor to a page they'd never see (App.jsx
+      redirects a signed-in user away from Signup) instead of the board.
+- [x] `frontend/src/BrowseJobsPage.jsx`: `JobCard` gained an Edit (✎)
+      button next to the existing admin-only Delete (✕) — opens an inline
+      `JobEditForm` (new) replacing the card's content, same field set and
+      look as `AddJobPage`'s draft form. Saves via a new `App.jsx`
+      `handleModify` (calls `updateJob`, patches the job into local
+      `jobs` state) — deliberately doesn't catch its own errors, so
+      `JobEditForm` can show them inline in its own form the same way
+      `CommentThread` already does for comment errors, rather than the
+      page-level banner.
+- [x] Tests: `test_regular_admin_cannot_promote` and 3 promote-related
+      tests updated for the superadmin-only param rename; 5 new
+      `_modify_job` cases (admin/superadmin can modify, regular member
+      403s, unknown job 404s, missing link+email still rejected). 108
+      tests pass.
+
+Also fixed in the same pass, surfaced by the user mid-review ("the
+username has to be unique not name"): `users.name` had carried a UNIQUE
+COLLATE NOCASE constraint since the very first schema, from back when
+`name` was the only identifier. Task 6.7 split off `username` as the real
+unique login handle and intended `name` to become a free-form display
+name, but noted at the time (Task 6.9) that dropping the leftover SQL
+constraint "would need a full table rebuild, judged not worth the risk" —
+so it silently kept rejecting two different accounts that happened to
+share a display name (confirmed live: registering a second "Alex" 409'd
+with "That name is already taken"). Fixed properly this pass:
+- [x] `SCHEMA`'s `users.name` column dropped `UNIQUE` (fresh databases
+      never get the constraint).
+- [x] `database._drop_users_name_unique_constraint()` (new, runs at the
+      end of `_migrate_users_table`): detects the constraint via SQLite's
+      auto-index for an inline UNIQUE column, and if found, rebuilds the
+      table from its own live `sqlite_master` CREATE TABLE text (not a
+      hand-written column list — the real `backend/devcareer.db` had
+      accumulated a legacy `last_digest_at` column from a schema iteration
+      this codebase has since moved past, which a hardcoded rebuild would
+      have silently dropped). No-op on every later start once fixed.
+      Verified against a copy of the real database before touching the
+      live one: all 8 rows byte-for-byte preserved, constraint gone,
+      re-running `init_db()` a second time is a no-op. Applied for real by
+      restarting the backend (`init_db()` runs at import).
+- [x] `main.py`'s `register()` no longer catches `sqlite3.IntegrityError`
+      (dead code now — nothing left on `users` raises it) — the `sqlite3`
+      import was unused afterward and removed too.
+- [x] Tests: added `test_register_allows_duplicate_display_name`; renamed
+      `test_register_rejects_duplicate_name` →
+      `test_register_rejects_duplicate_username_case_insensitive` since
+      that's what it actually exercises (the test's two calls happen to
+      derive the same *username* from differently-cased names) — the old
+      name would now misleadingly suggest display-name collisions are
+      still rejected.
+- [x] Verified live end to end via Playwright against the real dev server/
+      database: logged in as SMASTER, confirmed the old topbar is gone
+      from Browse Jobs/Add Job, Landing's navbar identity block shows
+      Signed-in-as/Reminders/Switch, Leaderboard page loads and highlights
+      the signed-in user's row, Get started free routes correctly both
+      signed-in and signed-out, Switch logs out and redirects to Login,
+      and the JobEditForm opens/saves/reflects on the board with zero
+      console errors. Also registered two real accounts sharing a display
+      name against the live server to confirm the constraint fix
+      end-to-end, then removed the throwaway accounts afterward.
+
+### Task 6.11 — Password strength rule, leaderboard requires sign-in, superadmin bootstrap moved off display-name matching
+Status: DONE — 2026-07-17
+Why: user-directed, three requests in one pass: (1) confirm/enforce that
+`name` can collide across accounts but `username`/`email` can't — turned
+out already true and already tested (Task 6.10's
+`test_register_allows_duplicate_display_name` /
+`test_register_rejects_duplicate_username_*` / `test_register_rejects_
+duplicate_email`), so no code change needed there; (2) a password
+strength rule — no character may repeat back-to-back (2212 rejected, 2121
+allowed since the repeat isn't adjacent) and the password must mix
+letters, digits and a special character; (3) mid-review, "even the
+leaderboard page should not appear until login" — it was deliberately
+public since Task 6.10, reversed here; (4) further mid-review, a real
+security gap in the admin/superadmin bootstrap: `ADMIN_NAMES`/
+`SUPERADMIN_NAMES` (Task 6.2/6.9) auto-promoted by matching a registering
+or logging-in account's *display name* against an env var list — but
+`name` was never unique (Task 6.10's own duplicate-display-name fix),
+so anyone could register an account named e.g. "Soumyadeep Sarkar" and
+get auto-promoted. Replaced with one hardcoded master superadmin account
+(username/password from env, never source) as the *only* way to reach
+superadmin; regular admin is still only ever granted by an existing
+superadmin via the Task 6.10 promote endpoint, never automatically.
+
+Processes:
+- [x] `backend/app/main.py`'s `RegisterRequest` gained a `password`
+      `field_validator`: `re.search(r"(.)\1", value)` rejects any
+      back-to-back repeat; separate checks require at least one
+      `[A-Za-z]`, one `\d`, and one non-alphanumeric character. Applies to
+      registration only — `LoginRequest` is unchanged (checks a stored
+      hash, not password shape).
+- [x] `frontend/src/passwordRules.js` (new): `getPasswordError` mirrors the
+      backend regexes so Signup can fail fast client-side instead of
+      round-tripping for an obviously invalid password.
+      `App.jsx`'s `handleSignupSubmit` calls it before hitting the network;
+      `SignupPage.jsx` shows a static hint under the password field
+      (`.auth-hint`, new in `SignupPage.css`) spelling out the rule with
+      the 2212/2121 example.
+- [x] `frontend/src/App.jsx`: `'leaderboard'` added to both halves of the
+      sign-in gate (the redirect `useEffect` and its render-phase
+      early-return twin) alongside `board`/`share`/`profile` — a
+      signed-out visitor clicking Leaderboard now bounces to Login, same
+      as Browse Jobs/Add Job. `LeaderboardPage.jsx`'s stale "public and
+      ungated like Trending" comment corrected.
+- [x] `backend/app/main.py`: `_names_from_env`/`_maybe_promote_admin`
+      deleted outright, along with their call sites in `register()`/
+      `login()` (and the now-unused `os` import, re-added below for a
+      different reason). `database.ensure_admin_by_name`/
+      `ensure_superadmin_by_name` deleted too (nothing else called them).
+- [x] `database.ensure_master_superadmin(username, name, password_hash)`
+      (new): idempotent seed, called once at startup — creates the account
+      if the username doesn't exist yet, otherwise only re-asserts
+      `is_superadmin = 1` without touching the stored hash (a password
+      changed later shouldn't be reset by the next restart).
+- [x] Credentials read via `os.environ.get("MASTER_SUPERADMIN_USERNAME"/
+      "MASTER_SUPERADMIN_PASSWORD")` in `main.py` — never hardcoded in
+      source (a baked-in credential ends up in git history regardless of
+      `.env` being gitignored). If either is unset, no bootstrap account is
+      seeded at all (empty over confidently wrong, same principle as
+      `extractor.py`) rather than a silent known-default password. Set in
+      `backend/.env` (gitignored) for this deployment; `ADMIN_NAMES`/
+      `SUPERADMIN_NAMES` removed from that file since they're now dead
+      config.
+- [x] Tests: 6 new password-rule cases (back-to-back repeat rejected,
+      spaced-out repeat allowed, missing special/letter/number each
+      rejected); old `test_admin_names_env_promotes_existing_account_at_
+      login` replaced with `test_registering_with_admin_like_name_does_
+      not_grant_admin` (proves the closed gap: registering with name
+      "AdminUser"/"SuperAdminUser" grants neither role) plus
+      `test_master_superadmin_can_log_in` and
+      `test_master_superadmin_username_is_reserved`. Module-level
+      `SUPERADMIN_USER_ID`/`ADMIN_USER_ID` fixtures reworked: superadmin is
+      now a login as the seeded master account, admin is a fresh
+      registration promoted through the real promote endpoint (not a
+      name-matched env var) — every other test using these ids was
+      otherwise unaffected. 72 tests pass; test suite's own default
+      password (`"hunter22"`) replaced everywhere with `"Hunter1!"` since
+      the old one violates the new rule twice over (back-to-back `22`, no
+      special character).
+- [x] Verified live: isolated backend (scratch DB, `:8001`) + frontend
+      (temp Vite proxy config, `:5300`) so the check couldn't collide with
+      anything already running, driven headlessly via Playwright
+      (`channel="chrome"`, the system-installed Chrome — no browser
+      download needed). Confirmed: clicking Leaderboard while signed out
+      redirects to Login; submitting `"hunter22"` on Signup shows the
+      back-to-back-repeat error inline; submitting `"Ab2121!x"` (a
+      *spaced-out* repeat) succeeds and lands back on Login with the
+      success toast. Screenshots reviewed for all three states. Cleaned up
+      afterward: verification server processes killed by PID, temp
+      `frontend/vite.verify.config.js` deleted, scratch DB files left in
+      the session scratchpad (not the repo). The pre-existing dev backend
+      on `:8000` was left untouched throughout.
+
+---
+
 ## Open product decisions (not yet made — flag to the user, don't guess)
 
 - ~~Notification delivery channel for Phase 4 (Task 4.1)~~ — resolved

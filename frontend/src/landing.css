@@ -4,12 +4,28 @@
    motion" from the Claude Design exploration. Scoped under .landing so it
    never bleeds into the real app's styles. */
 
+/* position + z-index (not just .landing-header's own z-index: 100) so this
+   whole subtree — and the header's popover/drawer inside it — stacks
+   above App.jsx's separate #app div rather than losing to it on DOM order.
+   .landing-header's z-index only ever competed against *its own* siblings
+   within .landing (the hero/trending/footer sections) — #app is a sibling
+   of .landing itself, one level up, which a descendant's z-index can't
+   reach without .landing being positioned too. No overflow rule here
+   (previously overflow-x: hidden, meant for the hero's decorative
+   off-canvas blobs) — CSS forces overflow-y to a clipping 'auto' the
+   moment overflow-x isn't 'visible' (can't set one axis without the
+   other), which would clip the drawer/popover to .landing's own
+   (mostly header-only, off Home) box height. Each section that actually
+   needs horizontal clipping already sets its own overflow: hidden
+   (.landing-hero, .trending-marquee, .landing-cta), so nothing relied on
+   this outer rule. */
 .landing {
+  position: relative;
+  z-index: 10;
   font-family: 'Inter', system-ui, sans-serif;
   background: #f5f8fc;
   color: #0f2942;
   line-height: 1.5;
-  overflow-x: hidden;
 }
 
 .landing a {
@@ -34,7 +50,11 @@
 .landing-header {
   position: sticky;
   top: 0;
-  z-index: 20;
+  /* Above every page's own content (job cards, admin tables, the Mascot's
+     z-index: 50, etc.) so the Reminders popover anchored inside this
+     header — a descendant, so it's capped by this stacking context's own
+     ceiling — always renders on top no matter which page is showing. */
+  z-index: 100;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -67,10 +87,26 @@
   color: rgba(15, 41, 66, 0.55);
 }
 
-.landing-signed-in-as {
-  color: #0f2942;
-  font-weight: 600;
-  white-space: nowrap;
+/* Dock (frontend/src/Dock.jsx) — phone-only quick-access tab bar, shown
+   instead of the desktop nav below 720px (see the max-width:720px block
+   further down for the visible/reskinned state). Hidden here so desktop
+   never mounts a fixed bottom-center element for a nav that already has
+   the full drawer. */
+.landing-mobile-dock-wrap {
+  display: none;
+}
+
+/* Wraps Reminders/Profile (PRD.md Task 6.10, moved out of App.jsx's own
+   page-level header; Task 6.12 dropped the signed-in-as label and Switch
+   button, replaced by a Logout button on the Profile page itself).
+   position: relative so the Reminders popover (.notif-panel, index.css)
+   anchors its right edge here instead of drifting to the whole header's
+   edge. */
+.landing-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
 }
 
 .landing-links {
@@ -79,8 +115,42 @@
   gap: clamp(14px, 3vw, 34px);
 }
 
-.landing-links a.active {
+.landing-links a.active,
+.landing-identity a.active {
   color: #ff7a30;
+}
+
+.nav-icon-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Profile (PRD.md Task 6.13) — icon only, no visible label, so it reads
+   as an account/avatar button rather than a text nav item. */
+.nav-icon-link.icon-only {
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgba(15, 41, 66, 0.06);
+}
+
+.nav-icon-link.icon-only:hover {
+  background: rgba(255, 122, 48, 0.15);
+}
+
+/* Phone-width nav drawer toggle (PRD.md Task 6.15) — hidden on tablet/
+   desktop, where the nav row itself is always visible. */
+.landing-menu-toggle {
+  display: none;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 6px;
+  color: #0f2942;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .landing-btn-primary {
@@ -154,6 +224,15 @@
   margin: 24px auto 0;
   max-width: 760px;
   animation: dcFadeUp 0.6s ease 0.1s both;
+  /* TextType (frontend/src/TextType.jsx) renders this as `.text-type`,
+     which defaults to display: inline-block — that flows it onto the
+     same line as the badge above instead of stacking below it. */
+  display: block;
+}
+
+.landing-hero-cursor {
+  color: #ff7a30;
+  font-weight: 400;
 }
 
 .landing-hero > p {
@@ -179,11 +258,13 @@
   align-items: center;
   width: 600px;
   max-width: 100%;
-  background: #fff;
-  border-radius: 14px;
   padding: 8px 8px 8px 22px;
-  box-shadow: 0 16px 40px rgba(15, 41, 66, 0.12);
 }
+
+/* BorderGlow (frontend/src/BorderGlow.jsx) now supplies the pill's own
+   background/radius/shadow via its own card chrome — the form above only
+   needs to lay out the input + button inside it. Entrance fade-up is
+   already on the parent .landing-search, no need to repeat it here. */
 
 .landing-search input {
   flex: 1;
@@ -408,10 +489,10 @@
   margin: 0 auto;
 }
 
-/* Railway track connecting the three steps, with a train travelling along
-   it — desktop/3-column layout only (see the max-width:720px override
-   below): on the single-column mobile layout a horizontal line stops
-   meaning anything once the steps stack vertically. */
+/* Dashed track connecting the three steps — desktop/3-column layout only
+   (see the max-width:720px override below): on the single-column mobile
+   layout a horizontal line stops meaning anything once the steps stack
+   vertically. */
 .how-grid::before {
   content: '';
   position: absolute;
@@ -428,20 +509,38 @@
   );
 }
 
+/* Above the track/pathway glow (z-index: 1, vs. their default stacking
+   below the ::after glow pseudo-element) so the glow visually passes
+   behind each numbered circle instead of floating on top of it. Also the
+   hover target for the lift/glow feedback below. */
 .how-grid > div {
   position: relative;
+  z-index: 1;
+  transition: transform 0.25s ease;
 }
 
+.how-grid > div:hover {
+  transform: translateY(-4px);
+}
+
+/* Pathway animation: a plain glowing marker travels left to right along
+   the dashed track (no emoji/icon) — reads as progress flowing through
+   the three steps. */
 .how-grid::after {
-  content: '🚂';
+  content: '';
   position: absolute;
-  top: 2px;
+  top: 25px;
   left: 16.6%;
-  font-size: 22px;
-  animation: howItWorksTrain 7s ease-in-out infinite;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, #ffb27a 0%, #ff7a30 65%, transparent 100%);
+  box-shadow: 0 0 14px 4px rgba(255, 122, 48, 0.55);
+  animation: howItWorksPathway 5s ease-in-out infinite;
 }
 
-@keyframes howItWorksTrain {
+@keyframes howItWorksPathway {
   0% { left: 16.6%; opacity: 0; }
   8% { opacity: 1; }
   50% { left: 50%; }
@@ -468,6 +567,14 @@
   font-weight: 700;
   font-size: 18px;
   margin: 0 auto;
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.how-grid > div:hover .how-step-num {
+  transform: scale(1.1);
+  box-shadow: 0 10px 22px rgba(15, 41, 66, 0.28);
 }
 
 .how-step-num.blue {
@@ -593,9 +700,107 @@
   to { transform: translateX(0%); }
 }
 
-@media (max-width: 720px) {
+/* Tablet: compact, not hidden — every nav item already has an icon
+   (PRD.md Task 6.12), so dropping just the text label keeps the whole row
+   on one line instead of wrapping or needing the phone drawer below. */
+@media (max-width: 1024px) and (min-width: 721px) {
+  .landing-nav {
+    gap: clamp(10px, 2vw, 20px);
+  }
+
   .landing-links {
+    gap: clamp(10px, 1.6vw, 18px);
+  }
+
+  .nav-label {
     display: none;
+  }
+
+  .nav-icon-link {
+    padding: 6px;
+  }
+}
+
+/* Phone: the row doesn't fit even icon-only (Reminders/Profile plus up to
+   8 links), so it collapses behind a hamburger toggle into a dropdown
+   drawer instead — full labels return since the drawer has room. */
+@media (max-width: 720px) {
+  .landing-menu-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .landing-nav {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    max-height: 0;
+    overflow: hidden;
+    background: #f5f8fc;
+    border-bottom: 1px solid rgba(15, 41, 66, 0.08);
+    box-shadow: 0 16px 28px rgba(15, 41, 66, 0.14);
+    transition: max-height 220ms ease;
+  }
+
+  .landing-nav.open {
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  .landing-links {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 8px 0;
+  }
+
+  .landing-links a.nav-icon-link {
+    padding: 13px clamp(20px, 6vw, 40px);
+    border-radius: 0;
+  }
+
+  .landing-identity {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 8px 0;
+    border-top: 1px solid rgba(15, 41, 66, 0.08);
+  }
+
+  .notif-settings,
+  .notif-settings button.nav-icon-link {
+    width: 100%;
+  }
+
+  .notif-settings button.nav-icon-link,
+  .landing-identity a.nav-icon-link {
+    justify-content: flex-start;
+    padding: 13px clamp(20px, 6vw, 40px);
+    border-radius: 0;
+    width: 100%;
+  }
+
+  /* The desktop circular icon-only Profile button becomes a normal
+     full-width row here, matching the rest of the drawer's list items. */
+  .landing-identity a.icon-only {
+    width: 100%;
+    height: auto;
+    border-radius: 0;
+    background: none;
+    justify-content: flex-start;
+    padding: 13px clamp(20px, 6vw, 40px);
+  }
+
+  .landing-nav > .landing-loginlink,
+  .landing-nav > .landing-btn-primary {
+    display: block;
+    text-align: center;
+    margin: 8px clamp(20px, 6vw, 40px);
   }
 
   .landing-search form {
@@ -604,6 +809,56 @@
 
   .landing-search input {
     font-size: 13px;
+  }
+
+  /* Dock's own CSS (Dock.css) makes .dock-panel position:absolute,
+     anchored to the nearest positioned ancestor — this wrapper supplies
+     that (position:fixed to the viewport) and reskins the component's
+     default dark/macOS look to the site's light navy+orange palette. */
+  .landing-mobile-dock-wrap {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100;
+    height: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    pointer-events: none;
+  }
+
+  .landing-mobile-dock-wrap .dock-outer {
+    pointer-events: none;
+  }
+
+  .landing-mobile-dock.dock-panel {
+    pointer-events: auto;
+    background: #ffffff;
+    border-color: rgba(15, 41, 66, 0.1);
+    box-shadow: 0 -4px 20px rgba(15, 41, 66, 0.12);
+  }
+
+  .landing-mobile-dock .dock-item {
+    background: #ffffff;
+    border-color: rgba(15, 41, 66, 0.1);
+    color: rgba(15, 41, 66, 0.55);
+  }
+
+  .landing-mobile-dock .dock-item.active {
+    color: #ff7a30;
+    border-color: rgba(255, 122, 48, 0.35);
+  }
+
+  .landing-mobile-dock .dock-label {
+    background: #0f2942;
+    border-color: #0f2942;
+  }
+
+  /* Fixed dock sits over the last ~70px of scrollable content otherwise —
+     give the page that much breathing room back on every view it mounts
+     alongside (Landing's marketing sections and App.jsx's other pages). */
+  body {
+    padding-bottom: calc(70px + env(safe-area-inset-bottom, 0));
   }
 }
 

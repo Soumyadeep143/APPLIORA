@@ -68,6 +68,14 @@
   font-size: 0.85rem;
 }
 
+.auth-hint {
+  width: 100%;
+  margin: -8px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
 .auth-submit {
   width: 100%;
   margin-top: 6px;
@@ -84,4 +92,14 @@
 .auth-switch:hover {
   transform: none;
   text-decoration: underline;
+}
+
+@media (max-width: 480px) {
+  .auth-page {
+    padding: 32px 12px;
+  }
+
+  .auth-card {
+    padding: 28px 20px;
+  }
 }
